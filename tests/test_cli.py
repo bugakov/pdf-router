@@ -1,0 +1,72 @@
+"""Ticket 10: CLI — version, --info, full run, exit codes."""
+
+import json
+from pathlib import Path
+
+from pdf_router import cli
+
+
+def test_version(capsys) -> None:
+    try:
+        cli.main(["--version"])
+    except SystemExit as e:
+        assert e.code == 0
+    out = capsys.readouterr().out
+    assert "pdf-router" in out
+
+
+def test_missing_file_returns_1(capsys, tmp_path) -> None:
+    assert cli.main([str(tmp_path / "nope.pdf")]) == 1
+
+
+def test_invalid_config_returns_1(capsys, tmp_path, p5_pdf) -> None:
+    bad = tmp_path / "router.toml"
+    bad.write_text("[[broken", encoding="utf-8")
+    assert cli.main(["--config", str(bad), str(p5_pdf)]) == 1
+
+
+def test_info_on_real_pdf(p5_pdf, capsys, tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)  # avoid picking up a real router.toml in CWD
+    code = cli.main(["--info", str(p5_pdf)])
+    assert code == 0
+    out = capsys.readouterr().out
+    data = json.loads(out)
+    assert data["pdf_type"] == "text_based"
+
+
+def test_full_run_three_files_exit_0(p5_pdf, tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+    out_dir = tmp_path / "out"
+    code = cli.main(["--out", str(out_dir), str(p5_pdf)])
+    assert code == 0
+    assert (out_dir / "p5.md").is_file()
+    assert (out_dir / "p5.chunks.jsonl").is_file()
+    assert (out_dir / "p5.ir.json").is_file()
+    md = (out_dir / "p5.md").read_text(encoding="utf-8")
+    assert "Обозначение" in md  # golden anchor
+    assert "ИЛО9.1" in md
+
+
+def test_render_subset_writes_only_requested(p5_pdf, tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    out_dir = tmp_path / "out_only_md"
+    code = cli.main(["--render", "md", "--out", str(out_dir), str(p5_pdf)])
+    assert code == 0
+    assert (out_dir / "p5.md").is_file()
+    assert not (out_dir / "p5.chunks.jsonl").exists()
+    assert not (out_dir / "p5.ir.json").exists()
+
+
+def test_exit_2_when_page_fails(p27_pdf, tmp_path, monkeypatch) -> None:
+    """No OCR configured → p27's single page skipped → exit 2."""
+    monkeypatch.chdir(tmp_path)
+    out_dir = tmp_path / "out27"
+    code = cli.main(["--out", str(out_dir), str(p27_pdf)])
+    assert code == 2
+    ir_json = json.loads((out_dir / "p27.ir.json").read_text(encoding="utf-8"))
+    assert ir_json["pages"][0]["error"] == "no_ocr_configured"
+
+
+def test_unknown_renderer_returns_1(p5_pdf, tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["--render", "md,wat", str(p5_pdf)]) == 1

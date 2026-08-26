@@ -1,0 +1,68 @@
+# router.toml.example — template for the real router.toml (which is gitignored).
+#
+# Copy to router.toml, uncomment the sections you need, fill in the values:
+#   cp router.toml.example router.toml && chmod 600 router.toml
+#
+# Rules (DESIGN §6):
+# - Precedence: CLI flag > this file > built-in defaults.
+# - No env-var lookups for keys — this file is the single source of truth.
+# - An [ocr.*] section that is absent (or commented out) means the adapter
+#   is not loaded at all; pages needing OCR get error="no_ocr_configured".
+# - Multiple [ocr.*] sections form an ordered fallback chain:
+#   TOML order = priority, first adapter returning non-empty text wins.
+
+[router]
+log_level = "info"          # debug | info | warning | error; default "warning"
+
+# --- Native OCR (PP-OCRv6 via pdf-inspector) — CPU-only, no keys -------------
+# Requires the pdfium + onnxruntime shared libraries on this host.
+#[ocr.pdf_inspector_ocr]
+#pdfium_lib_path = "/abs/path/libpdfium.so"
+#ort_dylib_path = "/abs/path/libonnxruntime.so"
+## optional:
+## model_cache_dir = "~/.cache/pdf-router/models"
+## offline = false
+
+# --- Tesseract — local binary, no keys ---------------------------------------
+# Requires the [tesseract] extra: uv sync --extra tesseract
+#[ocr.tesseract]
+#languages = ["rus", "eng"]
+## optional:
+## bin = "/usr/bin/tesseract"
+## dpi = 200
+
+# --- GLM OCR (z.ai) — cloud, API key -----------------------------------------
+# Requires the [cloud] extra: uv sync --extra cloud
+#[ocr.glm_ocr]
+#api_key = "sk-..."                   # NOT via env, by design
+#base_url = "https://api.z.ai/api/paas/v4"
+## optional:
+## model = "glm-ocr"
+## timeout = 60
+## dpi = 200
+
+# --- deepseek-ocr-2 (Novita AI) — cloud, API key ------------------------------
+# Requires the [cloud] extra: uv sync --extra cloud
+#[ocr.deepseek_ocr]
+#api_key = "sk-..."
+#base_url = "https://api.novita.ai/openai"
+#model = "deepseek/deepseek-ocr-2"
+## optional:
+## upload_url = "https://catbox.moe/user/api.php"
+## prompt = "Convert the document to markdown."
+## timeout = 60
+## max_tokens = 4096
+## dpi = 200
+
+[renderers]
+# Which renderers run is chosen via --render (CLI only); default: all three.
+# output_dir = "out/"   # default: ./out/
+# page_markers = true   # insert <!-- page N --> in md renderer; default false
+[renderers.chunks]
+# max_tokens = 512      # default
+# overlap_tokens = 64   # default
+[renderers.json]
+# include_page_bbox = false  # default; opt-in
+
+[routing]
+# Reserved for v2. Empty in v1.

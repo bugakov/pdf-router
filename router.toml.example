@@ -48,8 +48,11 @@ log_level = "info"          # debug | info | warning | error; default "warning"
 #base_url = "https://api.novita.ai/openai"
 #model = "deepseek/deepseek-ocr-2"
 ## optional:
-## upload_url = "https://catbox.moe/user/api.php"
-## prompt = "Convert the document to markdown."
+## upload_url = "https://uguu.se/upload"     # default; 48h retention.
+##   catbox.moe is BLOCKED from this host (412 "Invalid uploader", IP-wide);
+##   if you switch, the adapter auto-detects field names per host.
+## prompt = "OCR this image."                # terse prompt; the markdown-style
+##   prompt triggers repetition loops on dense drawing pages (live-tested).
 ## timeout = 60
 ## max_tokens = 4096
 ## dpi = 200

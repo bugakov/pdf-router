@@ -1,9 +1,10 @@
 """deepseek-ocr-2 cloud adapter (Novita AI, OpenAI-compatible). Opt-in, HTTP.
 
-Renders the page to PNG (200 DPI), uploads it (catbox.moe by default), then
-POSTs a chat-completions request with the image URL. ``requests`` lives in
-the ``[cloud]`` extra; if missing, the module still imports and
-:meth:`AdapterDeepseekOcr.available` returns ``False``.
+Renders the page to PNG (200 DPI), uploads it (uguu.se by default; catbox.moe
+blocks this host with 412 "Invalid uploader"), then POSTs a chat-completions
+request with the image URL. ``requests`` lives in the ``[cloud]`` extra; if
+missing, the module still imports and :meth:`AdapterDeepseekOcr.available`
+returns ``False``.
 """
 
 from __future__ import annotations
@@ -31,8 +32,14 @@ class AdapterDeepseekOcr:
 
     DEFAULT_BASE_URL = "https://api.novita.ai/openai"
     DEFAULT_MODEL = "deepseek/deepseek-ocr-2"
-    DEFAULT_UPLOAD_URL = "https://catbox.moe/user/api.php"
-    DEFAULT_PROMPT = "Convert the document to markdown."
+    # catbox.moe blocks this host (412 "Invalid uploader", IP-wide, curl too);
+    # uguu.se verified working 2026-08-26. Both formats supported in _upload.
+    DEFAULT_UPLOAD_URL = "https://uguu.se/upload"
+    # "OCR this image." empirically beats "Convert the document to markdown."
+    # on deepseek-ocr-2: the markdown prompt triggers repetition loops
+    # (live test 2026-08-26: p27 -> 447x "ПОВТОРА №" lines, big36 -> 99% dupes;
+    # the terse prompt gave clean output on the title page).
+    DEFAULT_PROMPT = "OCR this image."
     DEFAULT_TIMEOUT = 60.0
     DEFAULT_MAX_TOKENS = 4096  # reference scripts keep this < 8192
 
@@ -63,32 +70,45 @@ class AdapterDeepseekOcr:
         return self._complete(image_url)
 
     def _render_page_png(self, pdf_path: str, page_0indexed: int, dpi: int) -> bytes:
-        import fitz
+        import pymupdf
 
-        doc = fitz.open(pdf_path)
+        doc = pymupdf.open(pdf_path)
         try:
             if not 0 <= page_0indexed < doc.page_count:
                 raise DeepseekOcrError(f"page index {page_0indexed} out of range (0..{doc.page_count - 1})")
             zoom = dpi / 72.0
-            return doc[page_0indexed].get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False).tobytes(output="png")
+            return doc[page_0indexed].get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False).tobytes(output="png")
         finally:
             doc.close()
 
     def _upload(self, png: bytes) -> str:
+        # Field name is host-specific: uguu.se wants "files[]", catbox-style
+        # hosts want "fileToUpload". Extra form data is catbox-only.
+        host = self.upload_url.lower()
+        if "uguu" in host:
+            files = {"files[]": ("page.png", png, "image/png")}
+            data = None
+        else:
+            files = {"fileToUpload": ("page.png", png, "image/png")}
+            data = {"reqtype": "fileupload"}
         try:
-            r = _requests.post(
-                self.upload_url,
-                data={"reqtype": "fileupload"},
-                files={"fileToUpload": ("page.png", png, "image/png")},
-                timeout=self.timeout,
-            )
+            r = _requests.post(self.upload_url, data=data, files=files, timeout=self.timeout)
             r.raise_for_status()
         except Exception as exc:
             raise DeepseekOcrError(f"image upload failed: {exc}") from exc
-        url = r.text.strip().splitlines()[-1].strip()
-        if not url.startswith("http"):
-            raise DeepseekOcrError(f"bad upload response: {r.text[:200]!r}")
-        return url
+        # JSON hosts (uguu.se): {"success": true, "files": [{"url": ...}]}
+        try:
+            payload = r.json()
+            uploaded = payload.get("files") or []
+            if uploaded and str(uploaded[0].get("url", "")).startswith("http"):
+                return str(uploaded[0]["url"])
+        except ValueError:
+            pass
+        # plain-text hosts (catbox-style): body is the URL
+        url = r.text.strip().splitlines()[-1].strip() if r.text.strip() else ""
+        if url.startswith("http"):
+            return url
+        raise DeepseekOcrError(f"bad upload response: {r.text[:200]!r}")
 
     def _complete(self, image_url: str) -> str:
         try:

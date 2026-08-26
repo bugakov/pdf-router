@@ -30,14 +30,14 @@ class GlmOcrError(RuntimeError):
 
 
 def _render_page_png(pdf_path: str, page_0indexed: int, dpi: int = 200) -> bytes:
-    import fitz
+    import pymupdf
 
-    doc = fitz.open(pdf_path)
+    doc = pymupdf.open(pdf_path)
     try:
         if not 0 <= page_0indexed < doc.page_count:
             raise GlmOcrError(f"page index {page_0indexed} out of range (0..{doc.page_count - 1})")
         zoom = dpi / 72.0
-        return doc[page_0indexed].get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False).tobytes(output="png")
+        return doc[page_0indexed].get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False).tobytes(output="png")
     finally:
         doc.close()
 

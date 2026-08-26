@@ -113,8 +113,11 @@ api_key = "sk-..."
 base_url = "https://api.novita.ai/openai"
 model = "deepseek/deepseek-ocr-2"
 # optional:
-# upload_url = "https://catbox.moe/user/api.php"
-# prompt = "Convert the document to markdown."
+# upload_url = "https://uguu.se/upload"  # default; 48h retention. catbox.moe
+#   is blocked from this host (412 "Invalid uploader"); field names are
+#   auto-detected per host if you switch anyway.
+# prompt = "OCR this image."  # terse; markdown-style prompts trigger
+#   repetition loops on dense drawing pages (live-tested 2026-08-26)
 # timeout = 60
 # max_tokens = 4096
 # dpi = 200

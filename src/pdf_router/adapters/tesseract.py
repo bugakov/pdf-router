@@ -46,14 +46,14 @@ class AdapterTesseract:
         return text
 
     def _render_page_png(self, pdf_path: str, page_0indexed: int) -> bytes:
-        import fitz
+        import pymupdf
 
-        doc = fitz.open(pdf_path)
+        doc = pymupdf.open(pdf_path)
         try:
             if not 0 <= page_0indexed < doc.page_count:
                 raise TesseractError(f"page index {page_0indexed} out of range (0..{doc.page_count - 1})")
             page = doc[page_0indexed]
             zoom = self.dpi / 72.0
-            return page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False).tobytes(output="png")
+            return page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False).tobytes(output="png")
         finally:
             doc.close()

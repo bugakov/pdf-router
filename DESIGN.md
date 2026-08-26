@@ -29,7 +29,7 @@ Target: free, CPU-only, **predictable behaviour across hosts**.
 
 **Optional extras (installed only when needed):**
 - `[tesseract]` → `pytesseract` ≥ 0.3
-- `[cloud]` → `requests` ≥ 2.31
+- `[cloud]` → `requests` ≥ 2.31, `zai-sdk` ≥ 0.2 (the PyPI package `zai` is an empty placeholder — the real SDK is `zai-sdk`)
 - `[dev]` → `pytest` ≥ 8
 
 ## 4. Intermediate Representation (IR)
@@ -72,14 +72,15 @@ Target: free, CPU-only, **predictable behaviour across hosts**.
 
 One call to `pdf_inspector.process_pdf(path)` — single document load, detection + extraction + Markdown in one Rust pass. Then **fan-out per page** by `pages_needing_ocr`:
 
-- For each `p` in `pages_needing_ocr` (1-indexed): if an OCR adapter is configured, run it; otherwise mark `error="no_ocr_configured"` and keep the empty/garbled Markdown from pdf-inspector (do **not** silently substitute).
+- For each `p` in `pages_needing_ocr` (1-indexed): run the configured OCR adapter; on failure or empty result mark `error` and keep the empty/garbled Markdown from pdf-inspector (do **not** silently substitute).
+- Multiple `[ocr.*]` sections form an ordered **fallback chain** (TOML order = priority): per page, adapters are tried in order and the first non-empty result wins; `src_tool` records the winner. `ProcessingReport` distinguishes `pages_skipped` (no adapter configured → `error="no_ocr_configured"`) from `pages_failed` (adapters configured, all failed).
 - Text-based pages keep pdf-inspector Markdown untouched.
 
 **Why:** `process_pdf` is the cheapest correct entry point. `classify_pdf` is a redundant call. Region-routing is v2.
 
 ## 6. Config (TOML, locked)
 
-Single file. `config.toml` lives **in the working directory or `--config` path**. **Always gitignored**. Holds API keys, OCR paths, everything. No env-variable indirection — that was rejected for the cloud keys.
+Single file. `router.toml` lives **in the working directory or `--config` path**. **Always gitignored**. Holds API keys, OCR paths, everything. No env-variable indirection — that was rejected for the cloud keys.
 
 ```toml
 # router.toml — gitignored, not committed
@@ -97,18 +98,30 @@ ort_dylib_path = "/abs/path/libonnxruntime.so"
 languages = ["rus", "eng"]
 # optional:
 # bin = "/usr/bin/tesseract"
+# dpi = 200
 
 [ocr.glm_ocr]
 api_key = "sk-..."                 # NOT via env, by design
 base_url = "https://api.z.ai/api/paas/v4"
+# optional:
+# model = "glm-ocr"
+# timeout = 60
+# dpi = 200
 
 [ocr.deepseek_ocr]
 api_key = "sk-..."
 base_url = "https://api.novita.ai/openai"
 model = "deepseek/deepseek-ocr-2"
+# optional:
+# upload_url = "https://catbox.moe/user/api.php"
+# prompt = "Convert the document to markdown."
+# timeout = 60
+# max_tokens = 4096
+# dpi = 200
 
 [renderers]
-# At least one must be enabled. Default if section absent: all three on.
+# Which renderers run is chosen via --render (CLI only); no `enabled` key here.
+# Default: all three on.
 # output_dir = "out/"  # default: ./out/
 # page_markers = true  # insert <!-- page N --> in md renderer; default false
 [renderers.chunks]
@@ -145,7 +158,7 @@ No renderer imports another. No renderer imports an adapter. Renderers depend on
 pdf-router [--config PATH] [--out DIR] [--render md,chunks,json] [--info] [--log-level LEVEL] [--version] INPUT.pdf
 ```
 
-- `INPUT.pdf` — positional, required (or omit with `--info` against no input for schema).
+- `INPUT.pdf` — positional, required (also with `--info`).
 - `--config PATH` — defaults to `./router.toml` if present, else no config.
 - `--out DIR` — defaults to `./out/`.
 - `--render ...` — comma-separated subset; default = all three.
@@ -194,12 +207,19 @@ pdf-router/
       chunks.py
       json_renderer.py
   tests/
-    conftest.py                   # shared fixtures
-    test_p5.py
-    test_p27.py
-    test_big_test.py
-    test_ir.py
-    test_renderers.py
+    conftest.py                   # shared fixtures (PDF paths, native-OCR env)
+    test_smoke.py                 # import sanity
+    test_ir.py                    # IR round-trip
+    test_p5.py                    # p5 golden anchors
+    test_p27.py                   # text path + real OCR adapters (slow)
+    test_p5_e2e.py                # CLI e2e on p5
+    test_p27_e2e.py               # CLI e2e on p27 (no-OCR + tesseract)
+    test_big_test.py              # CLI e2e on big_test (slow)
+    test_cloud_adapters.py        # glm_ocr / deepseek_ocr, mocked HTTP
+    test_config.py                # TOML loader
+    test_renderers.py             # md / chunks / json
+    test_cli.py                   # argparse + exit codes
+    test_conventions.py           # module rules, IR_VERSION
 ```
 
 **Module rule (locked):** only `core.py` imports `adapters/` and `renderers/`. Adapters don't import renderers. Renderers don't import adapters. Everything may import `ir.py`.

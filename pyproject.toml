@@ -14,7 +14,7 @@ pdf-router = "pdf_router.cli:main"
 
 [project.optional-dependencies]
 tesseract = ["pytesseract>=0.3"]
-cloud = ["requests>=2.31", "zai-sdk>=0.2"]
+cloud = ["requests>=2.31"]
 dev = ["pytest>=8"]
 
 [build-system]

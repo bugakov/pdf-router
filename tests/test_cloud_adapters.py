@@ -21,52 +21,38 @@ def test_glm_available_rejects_missing_key() -> None:
 
 
 def test_glm_ocr_page_mocked(p27_pdf) -> None:
-    if glm_ocr.ZhipuAiClient is None:
-        pytest.skip("zai SDK not installed ([cloud] extra)")
+    if glm_ocr._requests is None:
+        pytest.skip("requests not installed ([cloud] extra)")
 
-    canned = {"layout_details": [[{"content": "# Heading"}, {"content": "body text"}]]}
+    chat_resp = mock.Mock()
+    chat_resp.status_code = 200
+    chat_resp.raise_for_status = mock.Mock()
+    chat_resp.json.return_value = {"choices": [{"message": {"content": "# Heading\n\nbody text"}}]}
 
-    class FakeResponse:
-        def model_dump(self):
-            return canned
-
-    class FakeLayoutParsing:
-        def create(self, **kwargs):
-            return FakeResponse()
-
-    class FakeClient:
-        def __init__(self, **kwargs):
-            pass
-
-        layout_parsing = FakeLayoutParsing()
-
-    with mock.patch.object(glm_ocr, "ZhipuAiClient", FakeClient):
+    with mock.patch.object(glm_ocr._requests, "post", return_value=chat_resp) as post:
         adapter = glm_ocr.AdapterGlmOcr({"api_key": "sk-test", "base_url": "https://x"})
         md = adapter.ocr_page(str(p27_pdf), 0)
 
     assert "# Heading" in md
     assert "body text" in md
+    # coding-endpoint chat/completions with inline base64 image, thinking off
+    body = post.call_args.kwargs["json"]
+    assert body["model"] == "glm-4.5v"
+    assert body["thinking"] == {"type": "disabled"}
+    content = body["messages"][0]["content"]
+    assert content[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert content[1]["type"] == "text"
 
 
 def test_glm_ocr_page_empty_raises(p27_pdf) -> None:
-    if glm_ocr.ZhipuAiClient is None:
-        pytest.skip("zai SDK not installed ([cloud] extra)")
+    if glm_ocr._requests is None:
+        pytest.skip("requests not installed ([cloud] extra)")
 
-    class FakeResponse:
-        def model_dump(self):
-            return {"layout_details": [[]]}
+    chat_resp = mock.Mock()
+    chat_resp.raise_for_status = mock.Mock()
+    chat_resp.json.return_value = {"choices": [{"message": {"content": ""}}]}
 
-    class FakeLayoutParsing:
-        def create(self, **kwargs):
-            return FakeResponse()
-
-    class FakeClient:
-        def __init__(self, **kwargs):
-            pass
-
-        layout_parsing = FakeLayoutParsing()
-
-    with mock.patch.object(glm_ocr, "ZhipuAiClient", FakeClient):
+    with mock.patch.object(glm_ocr._requests, "post", return_value=chat_resp):
         adapter = glm_ocr.AdapterGlmOcr({"api_key": "sk-test"})
         with pytest.raises(glm_ocr.GlmOcrError):
             adapter.ocr_page(str(p27_pdf), 0)

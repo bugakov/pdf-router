@@ -31,14 +31,20 @@ log_level = "info"          # debug | info | warning | error; default "warning"
 ## bin = "/usr/bin/tesseract"
 ## dpi = 200
 
-# --- GLM OCR (z.ai) — cloud, API key -----------------------------------------
+# --- GLM vision OCR (z.ai) — cloud, API key -----------------------------------
 # Requires the [cloud] extra: uv sync --extra cloud
+# Vision models (glm-4.5v) via chat/completions on the coding endpoint;
+# the image goes inline as base64 — no third-party file host.
 #[ocr.glm_ocr]
 #api_key = "sk-..."                   # NOT via env, by design
-#base_url = "https://api.z.ai/api/paas/v4"
+#base_url = "https://api.z.ai/api/coding/paas/v4"   # coding-plan endpoint;
+##   the standard /api/paas/v4 returns 429 "Insufficient balance" for a
+##   coding-plan key (document/vision calls are billed separately there).
 ## optional:
-## model = "glm-ocr"
-## timeout = 60
+## model = "glm-4.5v"                 # vision model; text models reject images
+## prompt = "Extract ALL text ..."     # raw-extraction prompt (default)
+## max_tokens = 8192
+## timeout = 300
 ## dpi = 200
 
 # --- deepseek-ocr-2 (Novita AI) — cloud, API key ------------------------------

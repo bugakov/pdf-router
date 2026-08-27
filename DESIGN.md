@@ -29,7 +29,7 @@ Target: free, CPU-only, **predictable behaviour across hosts**.
 
 **Optional extras (installed only when needed):**
 - `[tesseract]` → `pytesseract` ≥ 0.3
-- `[cloud]` → `requests` ≥ 2.31, `zai-sdk` ≥ 0.2 (the PyPI package `zai` is an empty placeholder — the real SDK is `zai-sdk`)
+- `[cloud]` → `requests` ≥ 2.31 (both cloud adapters are plain HTTP now; the GLM path no longer needs `zai-sdk` — see §6)
 - `[dev]` → `pytest` ≥ 8
 
 ## 4. Intermediate Representation (IR)
@@ -102,10 +102,14 @@ languages = ["rus", "eng"]
 
 [ocr.glm_ocr]
 api_key = "sk-..."                 # NOT via env, by design
-base_url = "https://api.z.ai/api/paas/v4"
+# coding-plan endpoint: the standard /api/paas/v4 bills vision/document calls
+# separately and returns 429 "Insufficient balance" for a coding-plan key.
+base_url = "https://api.z.ai/api/coding/paas/v4"
 # optional:
-# model = "glm-ocr"
-# timeout = 60
+# model = "glm-4.5v"               # vision model; text models reject images
+# prompt = "Extract ALL text ..."   # raw-extraction prompt (default)
+# max_tokens = 8192
+# timeout = 300
 # dpi = 200
 
 [ocr.deepseek_ocr]

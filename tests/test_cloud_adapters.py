@@ -24,35 +24,34 @@ def test_glm_ocr_page_mocked(p27_pdf) -> None:
     if glm_ocr._requests is None:
         pytest.skip("requests not installed ([cloud] extra)")
 
-    chat_resp = mock.Mock()
-    chat_resp.status_code = 200
-    chat_resp.raise_for_status = mock.Mock()
-    chat_resp.json.return_value = {"choices": [{"message": {"content": "# Heading\n\nbody text"}}]}
+    resp = mock.Mock()
+    resp.status_code = 200
+    resp.raise_for_status = mock.Mock()
+    resp.json.return_value = {"md_results": "# Heading\n\nbody text"}
 
-    with mock.patch.object(glm_ocr._requests, "post", return_value=chat_resp) as post:
+    with mock.patch.object(glm_ocr._requests, "post", return_value=resp) as post:
         adapter = glm_ocr.AdapterGlmOcr({"api_key": "sk-test", "base_url": "https://x"})
         md = adapter.ocr_page(str(p27_pdf), 0)
 
     assert "# Heading" in md
     assert "body text" in md
-    # coding-endpoint chat/completions with inline base64 image, thinking off
+    # standard endpoint layout_parsing with inline single-page PDF
+    url = post.call_args.args[0]
     body = post.call_args.kwargs["json"]
-    assert body["model"] == "glm-4.5v"
-    assert body["thinking"] == {"type": "disabled"}
-    content = body["messages"][0]["content"]
-    assert content[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
-    assert content[1]["type"] == "text"
+    assert url.endswith("/layout_parsing")
+    assert body["model"] == "glm-ocr"
+    assert body["file"].startswith("data:application/pdf;base64,")
 
 
 def test_glm_ocr_page_empty_raises(p27_pdf) -> None:
     if glm_ocr._requests is None:
         pytest.skip("requests not installed ([cloud] extra)")
 
-    chat_resp = mock.Mock()
-    chat_resp.raise_for_status = mock.Mock()
-    chat_resp.json.return_value = {"choices": [{"message": {"content": ""}}]}
+    resp = mock.Mock()
+    resp.raise_for_status = mock.Mock()
+    resp.json.return_value = {"md_results": ""}
 
-    with mock.patch.object(glm_ocr._requests, "post", return_value=chat_resp):
+    with mock.patch.object(glm_ocr._requests, "post", return_value=resp):
         adapter = glm_ocr.AdapterGlmOcr({"api_key": "sk-test"})
         with pytest.raises(glm_ocr.GlmOcrError):
             adapter.ocr_page(str(p27_pdf), 0)

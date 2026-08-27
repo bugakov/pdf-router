@@ -102,15 +102,13 @@ languages = ["rus", "eng"]
 
 [ocr.glm_ocr]
 api_key = "sk-..."                 # NOT via env, by design
-# coding-plan endpoint: the standard /api/paas/v4 bills vision/document calls
-# separately and returns 429 "Insufficient balance" for a coding-plan key.
-base_url = "https://api.z.ai/api/coding/paas/v4"
+# standard endpoint; the dedicated glm-ocr model is billed cheaply there.
+# A coding-plan key gets 429 "Insufficient balance" — use a key with the
+# document package (e.g. ZAI_API_KEY).
+base_url = "https://api.z.ai/api/paas/v4"
 # optional:
-# model = "glm-4.5v"               # vision model; text models reject images
-# prompt = "Extract ALL text ..."   # raw-extraction prompt (default)
-# max_tokens = 8192
+# model = "glm-ocr"                # dedicated document model (default)
 # timeout = 300
-# dpi = 200
 
 [ocr.deepseek_ocr]
 api_key = "sk-..."

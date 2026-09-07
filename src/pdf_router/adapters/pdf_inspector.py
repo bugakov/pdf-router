@@ -1,71 +1,289 @@
 """pdf-inspector text-path adapter — the only always-loaded adapter.
 
 One ``process_pdf`` call gives detection + extraction + concatenated Markdown
-(single Rust pass, ~63ms on a 1-page text PDF). ``PdfResult`` carries no
-per-page Markdown, so a second cheap call ``extract_pages_markdown`` supplies
-the per-page ``pages[]`` array. The adapter itself never runs OCR; the
-orchestrator (core.py) decides routing. See DESIGN.md §5 and ticket 03.
+(single Rust pass). ``PdfResult`` carries no per-page Markdown, so a second
+cheap call ``extract_pages_markdown`` supplies the per-page ``pages[]`` array.
+The adapter itself never runs OCR; the orchestrator (core.py) decides routing.
+
+Structural blocks (IR 0.2):
+- ``HeadingBlock`` — recovered from ``extract_structure_elements`` (tagged PDF)
+  with mcid→text join through ``extract_text_with_positions``. Fallback for
+  non-tagged PDF: font-size outlier detection (no bbox, ``source =
+  "font_size_fallback"``).
+- ``TableBlock`` — markdown-pipe-tables parsed from per-page ``PageMarkdown``.
+  No region-routing bbox (we don't ask pdf-inspector for region boundaries —
+  the input bbox is what we *gave* it, and we'd need a structural-detector
+  pass to find the right region, which is not in 1.17 Python bindings).
+- ``FigureBlock`` / ``FormulaBlock`` — always empty lists in 0.2 (no first-class
+  upstream API in pdf-inspector 1.17 Python bindings; reserved for future).
 """
 
 from __future__ import annotations
 
-from typing import ClassVar
+import re
+from collections import Counter
+from typing import Any, Iterable
 
-from pdf_router.ir import IR, Metadata, OcrReasonEntry, PageResult, SrcTool
+from pdf_router.ir import (
+    BBox,
+    FigureBlock,
+    FormulaBlock,
+    HeadingBlock,
+    IR,
+    Metadata,
+    OcrReasonEntry,
+    PageResult,
+    SrcTool,
+    TableBlock,
+)
+
+# Match a markdown table row: | ... | ... |
+_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
+# A header separator row: |---|:---:|---:|
+_TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$")
+# Heading level from a structure-tree role string, e.g. "H2" -> 2.
+_H_ROLE_RE = re.compile(r"^H([1-6])$")
 
 
-class AdapterPdfInspector:
-    name: ClassVar[str] = "pdf_inspector"
+def _parse_markdown_table(md: str) -> tuple[list[list[str]], int]:
+    """Parse a markdown-pipe-table block into (rows, header_rows).
 
-    def available(self) -> bool:
-        try:
-            import pdf_inspector  # noqa: F401
-        except Exception:
-            return False
-        return True
+    Returns ``([], 0)`` if ``md`` is not a table. ``header_rows`` is the number
+    of leading rows above the separator; for our corpus that's usually 1.
 
-    def process(self, path: str) -> IR:
-        import pdf_inspector
+    Heuristic for header_rows beyond 1: rows whose every cell is short and
+    contains no digits are treated as headers. (Conservative; only fires when
+    a non-trivial number of header-looking rows precede a separator.)
+    """
+    lines = [ln for ln in md.splitlines() if ln.strip()]
+    if len(lines) < 2 or not _TABLE_ROW_RE.match(lines[0]) or not _TABLE_SEP_RE.match(lines[1]):
+        return [], 0
+    body_lines = [lines[0], lines[1]] + [ln for ln in lines[2:] if _TABLE_ROW_RE.match(ln)]
+    header_rows = 1
+    # Look ahead: any extra rows above the next blank? Markdown only allows
+    # one header row by spec, so we keep header_rows=1 unless we can detect
+    # a multi-line header by consecutive short text rows.
+    if len(body_lines) >= 4:
+        second_row_cells = [c.strip() for c in body_lines[2].strip("|").split("|")]
+        if all(c and not any(ch.isdigit() for ch in c) and len(c) < 40 for c in second_row_cells):
+            header_rows = 2  # heuristic
+    rows: list[list[str]] = []
+    for ln in body_lines[2 if header_rows == 2 else 2 :]:
+        # keep both header (if header_rows==2) and data rows
+        cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+        rows.append(cells)
+    if header_rows == 2:
+        # include second header row in rows
+        second = [c.strip() for c in body_lines[2].strip("|").split("|")]
+        rows.insert(0, second)
+    first_row_cells = [c.strip() for c in body_lines[0].strip("|").split("|")]
+    rows.insert(0, first_row_cells)
+    return rows, header_rows
 
-        result = pdf_inspector.process_pdf(path)  # single Rust pass
-        pages_result = pdf_inspector.extract_pages_markdown(path)  # per-page markdown
 
-        metadata = Metadata(
-            pdf_type=result.pdf_type,
-            page_count=result.page_count,
-            confidence=result.confidence,
-            processing_time_ms=result.processing_time_ms,
-            title=result.title,
-            is_complex_layout=result.is_complex_layout,
-            has_encoding_issues=result.has_encoding_issues,
-            pages_with_tables=list(result.pages_with_tables),
-            pages_with_columns=list(result.pages_with_columns),
-            pages_needing_ocr=list(result.pages_needing_ocr),
-            ocr_reasons_by_page=[
-                OcrReasonEntry(page=int(e.page), reasons=list(e.reasons))
-                for e in getattr(result, "ocr_reasons_by_page", []) or []
-            ],
-        )
+def _extract_tables_from_markdown(page_md: str) -> list[TableBlock]:
+    """Find consecutive markdown-pipe-table blocks in a page's markdown."""
+    blocks: list[TableBlock] = []
+    lines = page_md.splitlines()
+    i = 0
+    n = len(lines)
+    while i < n:
+        if _TABLE_ROW_RE.match(lines[i] or "") and i + 1 < n and _TABLE_SEP_RE.match(lines[i + 1] or ""):
+            j = i + 2
+            while j < n and _TABLE_ROW_RE.match(lines[j] or ""):
+                j += 1
+            md = "\n".join(lines[i:j])
+            rows, hdr = _parse_markdown_table(md)
+            blocks.append(TableBlock(markdown=md, rows=rows, header_rows=hdr, bbox=None))
+            i = j
+        else:
+            i += 1
+    return blocks
 
-        # ocr_reason lookup keyed by 1-indexed page number
-        reasons_by_page = {e.page: e for e in metadata.ocr_reasons_by_page}
 
-        pages: list[PageResult] = []
-        for pm in pages_result.pages:  # pm.page is 0-indexed
-            one_indexed = pm.page + 1
-            needs_ocr = one_indexed in metadata.pages_needing_ocr
-            reason_entry = reasons_by_page.get(one_indexed)
-            pages.append(
-                PageResult(
-                    page=pm.page,
-                    markdown=pm.markdown or "",
-                    needs_ocr=needs_ocr,
-                    ocr_reason=(
-                        ", ".join(reason_entry.reasons)
-                        if reason_entry and reason_entry.reasons
-                        else (pm.ocr_reason if hasattr(pm, "ocr_reason") else None)
-                    ),
-                    src_tool=SrcTool.PDF_INSPECTOR,
-                )
+def _mode(values: Iterable[float]) -> float:
+    """Return the most common value (bin to 0.5pt to avoid float noise)."""
+    c = Counter(round(v * 2) / 2 for v in values)
+    return c.most_common(1)[0][0] if c else 0.0
+
+
+def _headings_from_textitems(text_items: list[Any], page_0indexed: int) -> list[HeadingBlock]:
+    """Detect headings by font-size outlier (1.3x body mode), per page.
+
+    No bbox per-heading here — these come from font-size alone. We keep the
+    *full-line* text by concatenating items on the same line (same y, same
+    font_size) within the page.
+    """
+    if not text_items:
+        return []
+    page_items = [it for it in text_items if it.page - 1 == page_0indexed]
+    if not page_items:
+        return []
+    body = _mode(it.font_size for it in page_items)
+    if body <= 0:
+        return []
+    threshold = body * 1.3
+
+    # Group by (font_size, y) so we don't merge items on different visual lines.
+    by_line: dict[tuple[float, float], list[Any]] = {}
+    for it in page_items:
+        if it.font_size >= threshold and it.text and it.text.strip():
+            key = (round(it.font_size, 2), round(it.y, 1))
+            by_line.setdefault(key, []).append(it)
+    out: list[HeadingBlock] = []
+    # sort by y descending (PDF y goes up)
+    for (sz, y), items in sorted(by_line.items(), key=lambda kv: -kv[0][1]):
+        items.sort(key=lambda it: it.x)
+        text = " ".join(it.text.strip() for it in items).strip()
+        if not text:
+            continue
+        level = 1 if sz >= body * 1.8 else (2 if sz >= body * 1.5 else 3)
+        x0 = min(it.x for it in items)
+        x1 = max(it.x + it.width for it in items)
+        y0 = min(it.y for it in items)
+        y1 = max(it.y + it.height for it in items)
+        out.append(
+            HeadingBlock(
+                level=level,
+                text=text,
+                bbox=BBox(x0=x0, y0=y0, x1=x1, y1=y1),
+                source="font_size_fallback",
             )
-        return IR(metadata=metadata, pages=pages)
+        )
+    return out
+
+
+def _headings_from_structure_tree(
+    structure_elements: list[Any],
+    text_items_by_mcid: dict[tuple[int, int], list[Any]],
+) -> dict[int, list[HeadingBlock]]:
+    """Recover H1..H6 blocks from structure-tree + text items joined by (page, mcid).
+
+    Returns a mapping of 0-indexed page → list of HeadingBlock.
+    """
+    by_page: dict[int, list[HeadingBlock]] = {}
+    for el in structure_elements:
+        m = _H_ROLE_RE.match(el.role or "")
+        if not m:
+            continue
+        level = int(m.group(1))
+        # mcid may be None; skip if so (cannot join text)
+        if el.mcid is None:
+            continue
+        items = text_items_by_mcid.get((el.page, el.mcid), [])
+        if not items:
+            continue
+        items.sort(key=lambda it: it.x)
+        text = " ".join(it.text.strip() for it in items if it.text).strip()
+        if not text:
+            continue
+        x0 = min(it.x for it in items)
+        x1 = max(it.x + it.width for it in items)
+        y0 = min(it.y for it in items)
+        y1 = max(it.y + it.height for it in items)
+        by_page.setdefault(el.page - 1, []).append(
+            HeadingBlock(
+                level=level,
+                text=text,
+                bbox=BBox(x0=x0, y0=y0, x1=x1, y1=y1),
+                source="structure_tree",
+            )
+        )
+    return by_page
+
+
+# ---------------------------------------------------------------------------
+# Top-level API (v0.3: replaces AdapterPdfInspector().process())
+# ---------------------------------------------------------------------------
+
+
+def extract_ir(path: str) -> IR:
+    """Extract full IR from a PDF via pdf-inspector.
+
+    Two Rust calls:
+    - ``process_pdf(path)`` — document-level metadata.
+    - ``extract_pages_markdown(path)`` — per-page markdown + OCR flags.
+
+    Plus two optional structural passes:
+    - ``extract_structure_elements(path)`` — tagged PDF structure tree.
+    - ``extract_text_with_positions(path)`` — per-glyph position data.
+
+    Returns an ``IR`` with fully-populated ``Metadata`` and a ``PageResult`` list.
+    """
+    import pdf_inspector
+
+    result = pdf_inspector.process_pdf(path)
+    pages_result = pdf_inspector.extract_pages_markdown(path)
+
+    metadata = Metadata(
+        pdf_type=result.pdf_type,
+        page_count=result.page_count,
+        confidence=result.confidence,
+        processing_time_ms=result.processing_time_ms,
+        title=result.title,
+        is_complex_layout=result.is_complex_layout,
+        has_encoding_issues=result.has_encoding_issues,
+        pages_with_tables=list(result.pages_with_tables),
+        pages_with_columns=list(result.pages_with_columns),
+        pages_needing_ocr=list(result.pages_needing_ocr),
+        ocr_reasons_by_page=[
+            OcrReasonEntry(page=int(e.page), reasons=list(e.reasons))
+            for e in getattr(result, "ocr_reasons_by_page", []) or []
+        ],
+    )
+
+    reasons_by_page = {e.page: e for e in metadata.ocr_reasons_by_page}
+
+    structure_elements: list[Any] = []
+    try:
+        structure_elements = pdf_inspector.extract_structure_elements(path)
+    except Exception:
+        structure_elements = []
+
+    text_items: list[Any] = []
+    try:
+        text_items = pdf_inspector.extract_text_with_positions(path)
+    except Exception:
+        text_items = []
+
+    text_items_by_mcid: dict[tuple[int, int], list[Any]] = {}
+    for it in text_items:
+        if it.mcid is not None:
+            text_items_by_mcid.setdefault((it.page, it.mcid), []).append(it)
+
+    headings_by_page_struct = _headings_from_structure_tree(structure_elements, text_items_by_mcid)
+    pages_with_struct_headings = set(headings_by_page_struct.keys())
+
+    pages: list[PageResult] = []
+    for pm in pages_result.pages:
+        one_indexed = pm.page + 1
+        needs_ocr = one_indexed in metadata.pages_needing_ocr
+        reason_entry = reasons_by_page.get(one_indexed)
+        blocks: list[Any] = []
+        blocks.extend(_extract_tables_from_markdown(pm.markdown or ""))
+        struct_h = headings_by_page_struct.get(pm.page, [])
+        if struct_h:
+            blocks.extend(struct_h)
+        else:
+            blocks.extend(_headings_from_textitems(text_items, pm.page))
+        blocks.extend([])
+        pages.append(
+            PageResult(
+                page=pm.page,
+                markdown=pm.markdown or "",
+                needs_ocr=needs_ocr,
+                ocr_reason=(
+                    ", ".join(reason_entry.reasons)
+                    if reason_entry and reason_entry.reasons
+                    else (pm.ocr_reason if hasattr(pm, "ocr_reason") else None)
+                ),
+                src_tool=SrcTool.PDF_INSPECTOR,
+                blocks=blocks,
+            )
+        )
+    return IR(metadata=metadata, pages=pages)
+
+
+# ---------------------------------------------------------------------------
+# Compat shim removed in v0.3 (RT-14). Use ``extract_ir()`` directly.
+# ---------------------------------------------------------------------------

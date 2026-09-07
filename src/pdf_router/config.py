@@ -28,6 +28,15 @@ _KNOWN_ROUTER_KEYS = {"log_level"}
 _KNOWN_RENDERERS_KEYS = {"output_dir", "page_markers", "chunks", "json"}
 _KNOWN_CHUNKS_KEYS = {"max_tokens", "overlap_tokens"}
 _KNOWN_JSON_KEYS = {"include_page_bbox"}
+_KNOWN_ROUTING_KEYS = {
+    "language",
+    "text_alpha_threshold",
+    "workers",
+    "extract_raster_photos",
+    "extract_vector_diagrams",
+    "ocr_fallback_engine",
+    "ocr_fallback_params",
+}
 
 
 class ConfigError(Exception):
@@ -73,12 +82,24 @@ class RendererConfig:
 
 
 @dataclass
+class RoutingConfig:
+    language: str | None = None
+    text_alpha_threshold: float = 0.30
+    workers: int = 2
+    extract_raster_photos: bool = True
+    extract_vector_diagrams: bool = False
+    ocr_fallback_engine: str = "pdf_inspector_ocr"
+    ocr_fallback_params: dict | None = None  # passed to the OCR adapter
+
+
+@dataclass
 class RouterConfig:
     """Everything the Router needs. Order of ``ocr_specs`` = fallback order."""
 
     ocr_specs: list[OCRAdapterSpec] = field(default_factory=list)
     log_level: str = "warning"
     renderers: RendererConfig = field(default_factory=RendererConfig)
+    routing: RoutingConfig = field(default_factory=RoutingConfig)
 
     @classmethod
     def from_toml(cls, path: str | Path | None) -> "RouterConfig":
@@ -115,7 +136,8 @@ class RouterConfig:
             specs.append(OCRAdapterSpec(name=name, params=dict(params)))
 
         renderers = _parse_renderers(data.get("renderers", {}))
-        return cls(ocr_specs=specs, log_level=log_level, renderers=renderers)
+        routing = _parse_routing(data.get("routing", {}))
+        return cls(ocr_specs=specs, log_level=log_level, renderers=renderers, routing=routing)
 
 
 def _warn_unknown(present: Any, known: set[str], where: str) -> None:
@@ -160,5 +182,32 @@ def _parse_renderers(sec: Any) -> RendererConfig:
     _warn_unknown(json_sec, _KNOWN_JSON_KEYS, "[renderers.json]")
     if "include_page_bbox" in json_sec:
         cfg.json_include_page_bbox = bool(json_sec["include_page_bbox"])
+
+    return cfg
+
+
+def _parse_routing(sec: Any) -> RoutingConfig:
+    if not isinstance(sec, dict):
+        raise ConfigError("[routing] must be a table")
+    _warn_unknown(sec, _KNOWN_ROUTING_KEYS, "[routing]")
+
+    cfg = RoutingConfig()
+    if "language" in sec:
+        cfg.language = str(sec["language"]) if sec["language"] is not None else None
+    if "text_alpha_threshold" in sec:
+        cfg.text_alpha_threshold = float(sec["text_alpha_threshold"])
+    if "workers" in sec:
+        cfg.workers = int(sec["workers"])
+    if "extract_raster_photos" in sec:
+        cfg.extract_raster_photos = bool(sec["extract_raster_photos"])
+    if "extract_vector_diagrams" in sec:
+        cfg.extract_vector_diagrams = bool(sec["extract_vector_diagrams"])
+    if "ocr_fallback_engine" in sec:
+        cfg.ocr_fallback_engine = str(sec["ocr_fallback_engine"])
+    if "ocr_fallback_params" in sec:
+        params = sec["ocr_fallback_params"]
+        if not isinstance(params, dict):
+            raise ConfigError("[routing.ocr_fallback_params] must be an inline table")
+        cfg.ocr_fallback_params = dict(params)
 
     return cfg

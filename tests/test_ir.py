@@ -73,9 +73,9 @@ def test_to_dict_is_json_serializable() -> None:
 
 def test_big_test_golden_anchor(big_test_pdf) -> None:
     """Ticket 03: big_test.pdf metadata via the text-path adapter."""
-    from pdf_router.adapters.pdf_inspector import AdapterPdfInspector
+    from pdf_router.adapters.pdf_inspector import extract_ir
 
-    ir = AdapterPdfInspector().process(str(big_test_pdf))
+    ir = extract_ir(str(big_test_pdf))
 
     assert ir.metadata.pdf_type == "mixed"
     assert len(ir.metadata.pages_needing_ocr) == 10

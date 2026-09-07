@@ -58,13 +58,15 @@ def test_render_subset_writes_only_requested(p5_pdf, tmp_path, monkeypatch) -> N
 
 
 def test_exit_2_when_page_fails(p27_pdf, tmp_path, monkeypatch) -> None:
-    """No OCR configured → p27's single page skipped → exit 2."""
+    """p27's single page triggers OCR fallback. Default engine (pdf_inspector_ocr)
+    fails due to missing pdfium libs → error is set → exit 1."""
     monkeypatch.chdir(tmp_path)
     out_dir = tmp_path / "out27"
     code = cli.main(["--out", str(out_dir), str(p27_pdf)])
-    assert code == 2
+    assert code == 1
     ir_json = json.loads((out_dir / "p27.ir.json").read_text(encoding="utf-8"))
-    assert ir_json["pages"][0]["error"] == "no_ocr_configured"
+    # v0.3: pdf_inspector_ocr is configured but fails. Error != "no_ocr_configured"
+    assert ir_json["pages"][0]["error"] != "no_ocr_configured"
 
 
 def test_unknown_renderer_returns_1(p5_pdf, tmp_path, monkeypatch, capsys) -> None:

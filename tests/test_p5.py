@@ -1,15 +1,19 @@
 """Ticket 03: pdf-inspector text-path adapter against p5.pdf (golden anchors)."""
 
-from pdf_router.adapters.pdf_inspector import AdapterPdfInspector
+from pdf_router.adapters.pdf_inspector import extract_ir
 from pdf_router.ir import SrcTool
 
 
 def test_adapter_available() -> None:
-    assert AdapterPdfInspector().available() is True
+    try:
+        import pdf_inspector  # noqa: F401
+        assert True
+    except ImportError:
+        assert False, "pdf_inspector not importable"
 
 
 def test_p5_properties_and_anchors(p5_pdf) -> None:
-    ir = AdapterPdfInspector().process(str(p5_pdf))
+    ir = extract_ir(str(p5_pdf))
 
     assert ir.metadata.pdf_type == "text_based"
     assert ir.metadata.is_complex_layout is True

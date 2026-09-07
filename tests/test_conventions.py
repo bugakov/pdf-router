@@ -12,7 +12,7 @@ SRC = Path(__file__).parent.parent / "src" / "pdf_router"
 
 
 def test_ir_version() -> None:
-    assert IR_VERSION == "0.1"
+    assert IR_VERSION == "0.2"
 
 
 @pytest.mark.parametrize("cls", [Metadata, PageResult, IR])

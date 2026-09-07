@@ -52,7 +52,7 @@ def test_chunks_jsonl_structure() -> None:
     assert lines, "expected at least one chunk"
     for ln in lines:
         chunk = json.loads(ln)
-        assert set(chunk) == {"chunk_id", "text", "page", "section", "src_tool"}
+        assert set(chunk) == {"chunk_id", "text", "page", "section", "src_tool", "images"}
 
 
 def test_chunks_sections_and_pages() -> None:
@@ -99,3 +99,31 @@ def test_json_page_bbox_toggle() -> None:
     out = json_renderer.render(ir, config=cfg)
     d = json.loads(out)
     assert d["pages"][0]["page_bbox"] == [595.0, 842.0]
+
+
+# --- RT-13: images in chunks/json -------------------------------------------
+
+
+def test_chunks_include_images() -> None:
+    """v0.3: each chunk carries page.images (relative paths)."""
+    ir = make_ir()
+    ir.pages[0].images = ["abc123/page0001_photo_00.png", "abc123/page0001_photo_01.png"]
+    ir.pages[1].images = []
+    out = chunks_renderer.render(ir, config=RendererConfig())
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    assert len(lines) >= 1
+    p0_chunk = next(json.loads(ln) for ln in lines if json.loads(ln)["page"] == 0)
+    p1_chunk = next(json.loads(ln) for ln in lines if json.loads(ln)["page"] == 1)
+    assert p0_chunk["images"] == ["abc123/page0001_photo_00.png", "abc123/page0001_photo_01.png"]
+    assert p1_chunk["images"] == []
+
+
+def test_json_round_trip_images() -> None:
+    """images survive to_dict → from_dict round-trip."""
+    ir = make_ir()
+    ir.pages[0].images = ["abc/page0001_photo_00.png"]
+    from pdf_router.ir import from_dict, to_dict
+    d = to_dict(ir)
+    assert d["pages"][0]["images"] == ["abc/page0001_photo_00.png"]
+    ir2 = from_dict(d)
+    assert ir2.pages[0].images == ["abc/page0001_photo_00.png"]

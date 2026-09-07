@@ -91,6 +91,7 @@ def render(ir: IR, *, config: RendererConfig) -> str:
                             "page": page.page,
                             "section": section,
                             "src_tool": page.src_tool.value,
+                            "images": list(page.images),  # relative paths from output_dir
                         },
                         ensure_ascii=False,
                     )

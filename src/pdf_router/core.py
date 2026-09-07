@@ -1,31 +1,34 @@
-"""Router orchestration. DESIGN.md §5.
+"""v0.3 routing pipeline — flat functions, no adapter classes.
 
-One ``process_pdf`` pass (via the always-loaded pdf-inspector adapter), then
-fan-out per ``needs_ocr`` page over the configured OCR specs. First available
-spec wins; failures never abort the pipeline (graceful degradation).
+Design (TKT-RT-01):
+1. extract_ir(pdf_path) — pdf-inspector, always.
+2. For each page, in parallel (ThreadPoolExecutor):
+   - extract_images_for_page: raster + vector images, independent of text.
+   - process_text_for_page: looks_like_text per-page; OCR fallback all pages if needed.
+3. Return IR 0.2 with page.images populated.
+
+Key decisions:
+- page.needs_ocr from pdf-inspector bypasses our looks_like_text (TKT-RT-03).
+- looks_like_text is per-page, not per-block (TKT-RT-02).
+- OCR is per-page, one raster + one OCR call per page (TKT-RT-10).
+- OCR engine is one, configured via routing.ocr_fallback_engine (TKT-RT-06).
+- AdapterPdfInspector compat shim removed in v0.3 (RT-14). Use extract_ir() directly.
 """
 
 from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Any, Protocol
 
-from pdf_router.config import OCRAdapterSpec, RouterConfig
+from pdf_router.config import RouterConfig
 from pdf_router.ir import IR, SrcTool
+from pdf_router.quality import looks_like_text
+from pdf_router.ocr import ocr_page, OcrError
+from pdf_router.extract_images import extract_raster_photos, extract_vector_diagrams
 
 logger = logging.getLogger("pdf_router")
-
-
-class OCRAdapter(Protocol):
-    """The per-page OCR contract every adapter implements (tickets 05-07)."""
-
-    name: str
-
-    def available(self) -> bool: ...
-
-    def ocr_page(self, pdf_path: str, page_0indexed: int) -> str: ...
 
 
 @dataclass
@@ -34,114 +37,139 @@ class ProcessingReport:
     pages_native: int = 0
     pages_ocr: int = 0
     pages_failed: int = 0
-    pages_skipped: int = 0
 
 
-#: Maps spec name → adapter class. Only core.py imports adapters (DESIGN §10).
-ADAPTER_CLASSES: dict[str, str] = {
-    "pdf_inspector_ocr": "pdf_router.adapters.pdf_inspector_ocr:AdapterPdfInspectorOCR",
-    "tesseract": "pdf_router.adapters.tesseract:AdapterTesseract",
-    "glm_ocr": "pdf_router.adapters.glm_ocr:AdapterGlmOcr",
-    "deepseek_ocr": "pdf_router.adapters.deepseek_ocr:AdapterDeepseekOcr",
-}
+def _engine_to_src_tool(engine: str) -> SrcTool:
+    """Map engine name string to SrcTool enum value."""
+    return SrcTool(engine)
 
 
-def _load_adapter_class(dotted: str) -> type | None:
-    """Import an adapter class lazily; None if the module is not written yet."""
-    module_path, _, attr = dotted.partition(":")
-    try:
-        module = __import__(module_path, fromlist=[attr])
-        return getattr(module, attr)
-    except Exception:
-        return None
+def process_pdf(pdf_path: str, config: RouterConfig) -> tuple[IR, ProcessingReport]:
+    """Full routing pipeline. Returns (IR, ProcessingReport)."""
+    from pdf_router.adapters.pdf_inspector import extract_ir
 
+    t0 = time.perf_counter()
+    doc = extract_ir(pdf_path)
+    report = ProcessingReport(pages_total=len(doc.pages))
 
-class Router:
-    """Load a PDF once, fan OCR out per page, return a complete IR."""
+    output_dir = config.renderers.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    def __init__(self, config: RouterConfig | None = None) -> None:
-        self.config = config or RouterConfig()
-        self.last_report: ProcessingReport | None = None
+    routing_cfg = config.routing
+    workers = max(1, routing_cfg.workers or 2)
 
-    @classmethod
-    def from_config(cls, config_path: str | None) -> "Router":
-        return cls(RouterConfig.from_toml(config_path))
-
-    def process(self, pdf_path: str) -> IR:
-        """Full pipeline. Raises only on document-level failure (exit 3)."""
-        from pdf_router.adapters.pdf_inspector import AdapterPdfInspector
-
-        adapter = AdapterPdfInspector()
-        if not adapter.available():
-            raise RuntimeError("pdf-inspector is not importable")
-
-        t0 = time.perf_counter()
-        doc = adapter.process(pdf_path)
-        report = ProcessingReport(pages_total=len(doc.pages))
-
-        # Instantiate configured adapters once; drop unavailable ones.
-        candidates: list[Any] = []
-        for spec in self.config.ocr_specs:
-            cls = _load_adapter_class(ADAPTER_CLASSES.get(spec.name, ""))
-            if cls is None:
-                logger.warning("ocr adapter %r not loadable; skipping", spec.name)
-                continue
-            instance = cls(spec.params)
-            if not instance.available():
-                logger.warning("ocr adapter %r unavailable; skipping", spec.name)
-                continue
-            candidates.append(instance)
-
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = []  # list of (page, img_fut, txt_fut)
         for page in doc.pages:
-            if not page.needs_ocr:
-                report.pages_native += 1
-                logger.info(
-                    "page %d/%d: %s (%.0fms)",
-                    page.page + 1, report.pages_total, page.src_tool.value,
-                    (time.perf_counter() - t0) * 1000,
-                )
-                continue
+            img_fut = pool.submit(
+                _extract_images_for_page,
+                page,
+                pdf_path,
+                output_dir,
+                routing_cfg,
+            )
+            txt_fut = pool.submit(
+                _process_text_for_page,
+                page,
+                pdf_path,
+                config,
+            )
+            futures.append((page, img_fut, txt_fut))
 
-            ocr_done = False
-            for adapter_instance in candidates:
-                t_page = time.perf_counter()
-                try:
-                    markdown = adapter_instance.ocr_page(pdf_path, page.page)
-                except Exception as exc:
-                    page.error = f"{adapter_instance.name}_failed: {exc}"
-                    logger.warning(
-                        "page %d/%d: %s — %s", page.page + 1, report.pages_total,
-                        adapter_instance.name, exc,
-                    )
-                    continue
-                if not markdown or not markdown.strip():
-                    page.error = f"{adapter_instance.name}_failed: empty result"
-                    logger.warning(
-                        "page %d/%d: %s — empty result", page.page + 1, report.pages_total,
-                        adapter_instance.name,
-                    )
-                    continue
-                page.markdown = markdown
-                page.src_tool = SrcTool(adapter_instance.name)
-                page.error = None
+        for page, img_fut, txt_fut in futures:
+            # Images are written to disk and their relative paths stored on the page.
+            try:
+                page.images = img_fut.result()
+            except Exception as exc:
+                logger.warning("page %d: image extraction failed: %s", page.page + 1, exc)
+                page.images = []
+
+            # Text processing mutates page.markdown / src_tool / error.
+            try:
+                txt_fut.result()
+            except Exception as exc:
+                logger.warning("page %d: text processing failed: %s", page.page + 1, exc)
+
+    # Aggregate report.
+    for page in doc.pages:
+        if page.needs_ocr:
+            if page.error:
+                report.pages_failed += 1
+            else:
                 report.pages_ocr += 1
-                logger.info(
-                    "page %d/%d: %s (%.0fms)",
-                    page.page + 1, report.pages_total, page.src_tool.value,
-                    (time.perf_counter() - t_page) * 1000,
-                )
-                ocr_done = True
-                break
+        else:
+            report.pages_native += 1
 
-            if not ocr_done:
-                page.error = page.error or "no_ocr_configured"
-                if not candidates:
-                    report.pages_skipped += 1
-                else:
-                    report.pages_failed += 1
-                logger.warning(
-                    "page %d/%d: skip — %s", page.page + 1, report.pages_total, page.error,
-                )
+    elapsed = time.perf_counter() - t0
+    logger.info(
+        "processed %d pages in %.1fs: %d native, %d OCR, %d failed",
+        report.pages_total,
+        elapsed,
+        report.pages_native,
+        report.pages_ocr,
+        report.pages_failed,
+    )
+    return doc, report
 
-        self.last_report = report
-        return doc
+
+# ---------------------------------------------------------------------------
+# Text processing
+# ---------------------------------------------------------------------------
+
+
+def _process_text_for_page(page, pdf_path: str, config: RouterConfig) -> None:
+    """Mutates page in-place: markdown, src_tool, error.
+
+    Logic (TKT-RT-01):
+    1. If pdf-inspector already said needs_ocr → skip looks_like_text.
+    2. Compute page_text from blocks + markdown.
+    3. Run looks_like_text(page_text, language, threshold).
+    4. If ok → return (native text).
+    5. Otherwise: rasterize page once + run OCR via ocr_page().
+    """
+    needs_ocr_from_inspector = page.needs_ocr
+
+    if not needs_ocr_from_inspector:
+        # Aggregate text from all blocks.
+        page_text = "\n".join(
+            b.text for b in page.blocks if hasattr(b, "text")
+        ).strip() or page.markdown or ""
+
+        if looks_like_text(
+            page_text,
+            language=config.routing.language,
+            threshold=config.routing.text_alpha_threshold,
+        ):
+            return  # native text is fine
+
+    # Fall through: rasterize + OCR.
+    # Set src_tool BEFORE the call so it is correct even on failure.
+    _src = _engine_to_src_tool(config.routing.ocr_fallback_engine)
+    try:
+        md, engine = ocr_page(pdf_path, page.page, config)
+        page.markdown = md
+        page.src_tool = _src
+        page.error = None
+    except OcrError as exc:
+        page.src_tool = _src  # mark what was attempted
+        page.error = f"{config.routing.ocr_fallback_engine}_failed: {exc}"
+        logger.warning("page %d: %s", page.page + 1, exc)
+
+
+# ---------------------------------------------------------------------------
+# Image extraction
+# ---------------------------------------------------------------------------
+
+
+def _extract_images_for_page(page, pdf_path: str, output_dir, routing_cfg) -> list[str]:
+    """Extract raster + vector images from one page.
+
+    Returns a list of relative paths from ``output_dir``.
+    Runs before text processing; does not mutate the page.
+    """
+    saved = []
+    if routing_cfg.extract_raster_photos:
+        saved.extend(extract_raster_photos(page, pdf_path, output_dir))
+    if routing_cfg.extract_vector_diagrams:
+        saved.extend(extract_vector_diagrams(page, pdf_path, output_dir))
+    return saved

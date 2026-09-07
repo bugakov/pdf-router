@@ -142,25 +142,23 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    from pdf_router.core import Router
+    from pdf_router.core import process_pdf
 
-    router = Router(cfg)
     try:
-        ir = router.process(str(input_path))
+        ir, report = process_pdf(str(input_path), cfg)
     except Exception as exc:  # document-level failure → exit 3
         logger.error("document processing failed: %s", exc)
         print(f"error: {exc}", file=sys.stderr)
         return 3
 
-    report = router.last_report
     try:
         _write_outputs(ir, cfg.renderers.output_dir, input_path.stem, cfg.renderers.enabled, cfg.renderers)
     except OSError as exc:
         print(f"error: cannot write output: {exc}", file=sys.stderr)
         return 1
 
-    if report is not None and report.pages_failed + report.pages_skipped > 0:
-        return 2
+    if report.pages_failed > 0:
+        return 1  # Some pages failed
     return 0
 
 

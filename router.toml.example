@@ -110,6 +110,10 @@ log_level = "info"          # debug | info | warning | error; default "warning"
 #   dpi = 150.0              # raster resolution (100 hallucinates, 200+ slower)
 #   minimum_confidence = 0.0 # 0.8 would cut ~12% text — too aggressive for docs
 #   offline = true           # skip hosted-OCR checks; default: true
+#   model_cache_dir = "/abs/path/to/cache"  # default: ~/.cache/pdf-inspector/models
+#   # The engine runs pdf-inspector's "selective OCR" (mode='auto'): it OCRs only
+#   # pages its own quality signals recommend and keeps native text for the rest.
+#   # We pass page_numbers=[N] to scope each call to one page.
 # For tesseract:
 #   languages = ["eng", "rus"]
 # For glm_ocr:

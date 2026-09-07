@@ -1,7 +1,7 @@
 """Tests for OCR dispatcher — RT-06 routing to configured engine.
 
 Covers the A1 implementation: ``pdf_inspector_ocr`` uses
-``process_pdf_with_ocr(mode='force')`` per-page, with ``offline`` flag
+``process_pdf_with_ocr(mode='auto')`` per-page, with ``offline`` flag
 plumbed through from ``ocr_fallback_params``.
 """
 
@@ -47,11 +47,11 @@ def test_pdf_inspector_ocr_calls_process_pdf_with_ocr() -> None:
     """A1: ``_ocr_pdf_inspector`` must use ``process_pdf_with_ocr``.
 
     Mocks the entire pdf_inspector module to assert:
-    1. mode='force' (orchestrator already decided OCR is needed)
+    1. mode='auto' (selective OCR: only on pages pdf-inspector routes there)
     2. page_numbers=[page_idx + 1] (1-indexed)
     3. dpi=... (default 150.0)
     4. minimum_confidence=... (default 0.0)
-    5. offline=... plumbed from params
+    5. offline=... plumbed from params (default True)
     """
     fake_page = MagicMock()
     fake_page.page_number = 5
@@ -79,7 +79,7 @@ def test_pdf_inspector_ocr_calls_process_pdf_with_ocr() -> None:
     fake_pdf_inspector.process_pdf_with_ocr.assert_called_once()
     call = fake_pdf_inspector.process_pdf_with_ocr.call_args
     assert call.args[0] == "/tmp/x.pdf"
-    assert call.kwargs["mode"] == "force"
+    assert call.kwargs["mode"] == "auto"
     assert call.kwargs["page_numbers"] == [5]  # 1-indexed
     assert call.kwargs["dpi"] == 200.0
     assert call.kwargs["minimum_confidence"] == 0.5

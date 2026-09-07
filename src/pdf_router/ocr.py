@@ -53,13 +53,16 @@ def _lookup_params(config: RouterConfig, engine: str) -> dict[str, Any]:
 def _ocr_pdf_inspector(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
     """OCR via pdf-inspector's selective OCR pipeline.
 
-    Uses ``process_pdf_with_ocr(mode='force')`` for one page at a time.
-    mode='force' because our orchestrator has already decided this page
-    needs OCR (either via page.needs_ocr from pdf-inspector, or because
-    looks_like_text() failed on the native text). At that point we do not
-    want pdf-inspector's auto-decision to second-guess us — e.g. it might
-    see a CID-font garbled page and return its own native text instead
-    of OCR. mode='force' guarantees OCR.
+    Uses ``process_pdf_with_ocr(mode='auto')`` for one page at a time.
+
+    mode='auto' is what pdf-inspector calls "selective OCR": it runs OCR
+    only on pages where its own quality signals recommend it, and keeps
+    native text for the rest. Our orchestrator has already decided this
+    page needs OCR (either via page.needs_ocr, or because looks_like_text()
+    failed on the native text), so we pass page_numbers=[page_idx+1] to
+    scope the call, and trust mode='auto' to actually OCR it. This is
+    much faster than mode='force' (which OCRs every page we pass) on PDFs
+    where most pages have good native text and only a few need OCR.
 
     Per-page call instead of one batched call: keeps ocr_page()'s
     (path, page_idx) signature unchanged, so core.py does not need a
@@ -76,7 +79,11 @@ def _ocr_pdf_inspector(pdf_path: str, page_idx: int, params: dict[str, Any]) -> 
     - ``minimum_confidence`` (default 0.0): drop regions below this threshold.
       0.8 would cut ~12% text on complex docs — too aggressive for
       documentation. Keep 0.0.
-    - ``offline`` (default True): skip hosted-OCR recommendation checks.
+    - ``offline`` (default True): skip hosted-OCR recommendation checks
+      and block model downloads. Set False only if you accept the network
+      round-trip to fetch a missing pinned model artifact on first use.
+    - ``model_cache_dir``: override the local model cache directory
+      (default ``~/.cache/pdf-inspector/models``).
     """
     import os
 
@@ -106,7 +113,7 @@ def _ocr_pdf_inspector(pdf_path: str, page_idx: int, params: dict[str, Any]) -> 
 
     result = pdf_inspector.process_pdf_with_ocr(
         pdf_path,
-        mode="force",
+        mode="auto",
         page_numbers=[page_idx + 1],  # 1-indexed
         dpi=dpi,
         minimum_confidence=minimum_confidence,
@@ -119,7 +126,6 @@ def _ocr_pdf_inspector(pdf_path: str, page_idx: int, params: dict[str, Any]) -> 
                 raise OcrError(f"page {page_idx + 1}: empty pdf_inspector_ocr result")
             return md
     raise OcrError(f"page {page_idx + 1} missing from pdf_inspector_ocr result")
-
 def _ocr_tesseract(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
     """OCR via tesseract CLI subprocess.
 

@@ -102,3 +102,17 @@ log_level = "info"          # debug | info | warning | error; default "warning"
 #            "glm_ocr" (cloud, requires api_key),
 #            "deepseek_ocr" (cloud, requires api_key).
 #ocr_fallback_engine = "pdf_inspector_ocr"
+
+# Parameters passed to the OCR engine. Required keys depend on the engine.
+# For pdf_inspector_ocr:
+#   pdfium_lib_path = "/abs/path/.runtime/lib/libpdfium.so"
+#   ort_dylib_path = "/abs/path/.runtime/.../libonnxruntime.so"
+#   dpi = 150.0              # raster resolution (100 hallucinates, 200+ slower)
+#   minimum_confidence = 0.0 # 0.8 would cut ~12% text — too aggressive for docs
+#   offline = true           # skip hosted-OCR checks; default: true
+# For tesseract:
+#   languages = ["eng", "rus"]
+# For glm_ocr:
+#   api_key = "..."
+#   base_url = "https://..."
+#ocr_fallback_params = { pdfium_lib_path = "/abs/path/.runtime/lib/libpdfium.so", ort_dylib_path = "/abs/path/.runtime/onnxruntime-linux-x64-1.27.0/lib/libonnxruntime.so", offline = true }

@@ -70,16 +70,22 @@ def _ocr_pdf_inspector(pdf_path: str, page_idx: int, params: dict[str, Any]) -> 
     the PDFium shared library and the ONNX Runtime dylib that pdf-inspector
     needs to actually run its PP-OCRv6 model.
 
-    The returned ``OcrPageResult.provenance`` (source, ocr_model,
-    ocr_confidence, render_dpi, warnings) is available on the result but
-    not surfaced to PageResult in v0.3 — it is wired up in v0.4+.
+    Tuning knobs (all optional, safe defaults):
+    - ``dpi`` (default 150.0): raster resolution for the render step.
+      100 is faster but hallucinates. 200/300 are slower, not better.
+    - ``minimum_confidence`` (default 0.0): drop regions below this threshold.
+      0.8 would cut ~12% text on complex docs — too aggressive for
+      documentation. Keep 0.0.
+    - ``offline`` (default True): skip hosted-OCR recommendation checks.
     """
     import os
 
     pdfium_lib = params.get("pdfium_lib_path")
     ort_dylib = params.get("ort_dylib_path")
     model_cache = params.get("model_cache_dir")
-    offline = bool(params.get("offline", False))
+    dpi = float(params.get("dpi", 150.0))
+    minimum_confidence = float(params.get("minimum_confidence", 0.0))
+    offline = bool(params.get("offline", True))
 
     if not (pdfium_lib and ort_dylib):
         raise OcrError("pdf_inspector_ocr requires pdfium_lib_path and ort_dylib_path")
@@ -102,6 +108,8 @@ def _ocr_pdf_inspector(pdf_path: str, page_idx: int, params: dict[str, Any]) -> 
         pdf_path,
         mode="force",
         page_numbers=[page_idx + 1],  # 1-indexed
+        dpi=dpi,
+        minimum_confidence=minimum_confidence,
         offline=offline,
     )
     for pg in result.pages:
@@ -109,11 +117,8 @@ def _ocr_pdf_inspector(pdf_path: str, page_idx: int, params: dict[str, Any]) -> 
             md = pg.markdown or ""
             if not md.strip():
                 raise OcrError(f"page {page_idx + 1}: empty pdf_inspector_ocr result")
-            # pg.provenance has source/ocr_model/ocr_confidence if we want
-            # to surface it on PageResult later.
             return md
     raise OcrError(f"page {page_idx + 1} missing from pdf_inspector_ocr result")
-
 
 def _ocr_tesseract(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
     """OCR via tesseract CLI subprocess.

@@ -49,7 +49,9 @@ def test_pdf_inspector_ocr_calls_process_pdf_with_ocr() -> None:
     Mocks the entire pdf_inspector module to assert:
     1. mode='force' (orchestrator already decided OCR is needed)
     2. page_numbers=[page_idx + 1] (1-indexed)
-    3. offline=... plumbed from params
+    3. dpi=... (default 150.0)
+    4. minimum_confidence=... (default 0.0)
+    5. offline=... plumbed from params
     """
     fake_page = MagicMock()
     fake_page.page_number = 5
@@ -63,7 +65,14 @@ def test_pdf_inspector_ocr_calls_process_pdf_with_ocr() -> None:
 
     with patch.dict("sys.modules", {"pdf_inspector": fake_pdf_inspector}):
         result = _ocr_pdf_inspector(
-            "/tmp/x.pdf", page_idx=4, params={**_params_with_runtime(), "offline": True}
+            "/tmp/x.pdf",
+            page_idx=4,
+            params={
+                **_params_with_runtime(),
+                "offline": True,
+                "dpi": 200.0,
+                "minimum_confidence": 0.5,
+            },
         )
 
     assert result == "ocr text"
@@ -72,11 +81,12 @@ def test_pdf_inspector_ocr_calls_process_pdf_with_ocr() -> None:
     assert call.args[0] == "/tmp/x.pdf"
     assert call.kwargs["mode"] == "force"
     assert call.kwargs["page_numbers"] == [5]  # 1-indexed
+    assert call.kwargs["dpi"] == 200.0
+    assert call.kwargs["minimum_confidence"] == 0.5
     assert call.kwargs["offline"] is True
 
-
-def test_pdf_inspector_ocr_default_offline_false() -> None:
-    """If params has no 'offline' key, default to False."""
+def test_pdf_inspector_ocr_default_params() -> None:
+    """Default dpi=150.0, minimum_confidence=0.0, offline=True when params are empty."""
     fake_page = MagicMock()
     fake_page.page_number = 1
     fake_page.markdown = "x"
@@ -91,7 +101,9 @@ def test_pdf_inspector_ocr_default_offline_false() -> None:
         _ocr_pdf_inspector("/tmp/x.pdf", page_idx=0, params=_params_with_runtime())
 
     call = fake_pdf_inspector.process_pdf_with_ocr.call_args
-    assert call.kwargs["offline"] is False
+    assert call.kwargs["dpi"] == 150.0
+    assert call.kwargs["minimum_confidence"] == 0.0
+    assert call.kwargs["offline"] is True
 
 
 def test_pdf_inspector_ocr_raises_on_empty_result() -> None:

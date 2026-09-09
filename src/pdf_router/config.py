@@ -88,7 +88,10 @@ class RoutingConfig:
     workers: int = 2
     extract_raster_photos: bool = True
     extract_vector_diagrams: bool = False
-    ocr_fallback_engine: str = "pdf_inspector_ocr"
+    # Default rapidocr: PP-OCRv6 small det + PP-OCRv5 mobile rec is the
+    # only combination that actually recognizes Cyrillic (validated in
+    # TKT-OC-02; pdf_inspector_ocr's dictionary has zero Cyrillic tokens).
+    ocr_fallback_engine: str = "rapidocr"
     ocr_fallback_params: dict | None = None  # passed to the OCR adapter
 
 

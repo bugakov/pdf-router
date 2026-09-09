@@ -90,6 +90,7 @@ def test_extract_vector_diagrams_threshold() -> None:
 # --- race-condition guard (regression test) ----------------------------------
 
 
+@pytest.mark.slow
 def test_process_pdf_distributes_images_across_pages() -> None:
     """REGRESSION: every page with images must see its own images list.
 
@@ -118,6 +119,7 @@ def test_process_pdf_distributes_images_across_pages() -> None:
         )
 
 
+@pytest.mark.slow
 def test_process_pdf_ir_json_has_images_per_page() -> None:
     """End-to-end CLI smoke: write the IR.json and confirm `images` appears on
     multiple pages, not just the last one."""

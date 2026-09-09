@@ -1,5 +1,7 @@
 """Ticket 02: IR serialization contract — round-trip must preserve equality."""
 
+import pytest
+
 from pdf_router.ir import IR_VERSION, IR, Metadata, OcrReasonEntry, PageResult, SrcTool, from_dict, to_dict
 
 
@@ -71,6 +73,7 @@ def test_to_dict_is_json_serializable() -> None:
     json.dumps(to_dict(make_ir()), ensure_ascii=False)
 
 
+@pytest.mark.slow
 def test_big_test_golden_anchor(big_test_pdf) -> None:
     """Ticket 03: big_test.pdf metadata via the text-path adapter."""
     from pdf_router.adapters.pdf_inspector import extract_ir

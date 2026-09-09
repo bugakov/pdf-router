@@ -29,6 +29,7 @@ class SrcTool(str, Enum):
     """Provenance tag: which tool produced a page's markdown."""
 
     PDF_INSPECTOR = "pdf_inspector"
+    RAPIDOCR = "rapidocr"
     PDF_INSPECTOR_OCR = "pdf_inspector_ocr"
     TESSERACT = "tesseract"
     GLM_OCR = "glm_ocr"

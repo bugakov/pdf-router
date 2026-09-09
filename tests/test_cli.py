@@ -58,11 +58,17 @@ def test_render_subset_writes_only_requested(p5_pdf, tmp_path, monkeypatch) -> N
 
 
 def test_exit_2_when_page_fails(p27_pdf, tmp_path, monkeypatch) -> None:
-    """p27's single page triggers OCR fallback. Default engine (pdf_inspector_ocr)
-    fails due to missing pdfium libs → error is set → exit 1."""
+    """p27's single page triggers OCR fallback. We force pdf_inspector_ocr via
+    --config (the new default is rapidocr, which would succeed and exit 0)."""
+    import textwrap
+    cfg = tmp_path / "test.toml"
+    cfg.write_text(textwrap.dedent("""\
+        [routing]
+        ocr_fallback_engine = "pdf_inspector_ocr"
+    """))
     monkeypatch.chdir(tmp_path)
     out_dir = tmp_path / "out27"
-    code = cli.main(["--out", str(out_dir), str(p27_pdf)])
+    code = cli.main(["--config", str(cfg), "--out", str(out_dir), str(p27_pdf)])
     assert code == 1
     ir_json = json.loads((out_dir / "p27.ir.json").read_text(encoding="utf-8"))
     # v0.3: pdf_inspector_ocr is configured but fails. Error != "no_ocr_configured"

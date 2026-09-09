@@ -3,11 +3,16 @@
 One function: ``ocr_page``. No adapter registry, no lazy imports, no Protocol.
 
 Engine-specific params come from the matching ``OCRAdapterSpec`` in
-``RouterConfig.ocr_specs`` (the ``[ocr]`` TOML section). If the engine
-is not configured, an empty dict is used as a fallback.
+``RouterConfig.ocr_specs`` (the ``[ocr]`` TOML section) or, with priority,
+from ``routing.ocr_fallback_params``. If neither is set, an empty dict is
+used as a fallback.
 
 Engines supported:
+- ``rapidocr`` — RapidAI RapidOCR on onnxruntime. Default. Recipe for
+  Russian: PP-OCRv6 small det + PP-OCRv5 eslav mobile rec (v6 rec has no
+  Cyrillic head at all, and eslav has no server ONNX — both verified).
 - ``pdf_inspector_ocr`` — PP-OCRv6 Small via pdf-inspector Rust + ONNX.
+  Cannot do Cyrillic (dictionary has zero Cyrillic tokens).
 - ``tesseract`` — local CLI, no API key required.
 - ``glm_ocr`` — Z.ai layout_parsing API, requires api_key.
 - ``deepseek_ocr`` — Novita AI deepseek-ocr-2, requires api_key.
@@ -48,6 +53,147 @@ def _lookup_params(config: RouterConfig, engine: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Engine implementations (flat functions, no class)
 # ---------------------------------------------------------------------------
+
+
+# Module-level engine cache for rapidocr: model init (even warm, from the
+# ModelScope cache) takes ~0.6s and loads two ONNX sessions; doing that on
+# every page would be wasteful. Keyed by the resolved recipe so a params
+# change creates a fresh engine instead of silently reusing the old one.
+_RAPIDOCR_ENGINE_CACHE: dict[tuple, Any] = {}
+
+# routing.language -> rapidocr LangRec. Det is always the multilingual v6
+# model (LangDet.CH in rapidocr terms); only Rec is language-sensitive.
+# No language hint defaults to ESLAV (most likely Russian corpus for this
+# project; in v0.4+ we can wire a script-detection pre-pass).
+_LANGUAGE_TO_LANG_REC = {
+    "ru": "ESLAV",       # Russian/Belarusian/Ukrainian head, PP-OCRv5 mobile
+    "be": "ESLAV",
+    "uk": "ESLAV",
+    "en": "EN",          # English/Latin head
+    "bg": "CYRILLIC",   # generic Cyrillic head (35 languages)
+    "sr": "CYRILLIC",
+    "mk": "CYRILLIC",
+    "kk": "CYRILLIC",
+    None: "ESLAV",      # default — see comment above
+}
+_LANG_REC_DEFAULT = "ESLAV"
+
+
+def _rapidocr_language(config: RouterConfig):
+    """Resolve routing.language to a rapidocr LangRec enum.
+
+    Public for tests. Returns a LangRec member; default is ESLAV
+    (project's primary corpus is Russian).
+    """
+    from rapidocr import LangRec
+
+    name = _LANGUAGE_TO_LANG_REC.get(config.routing.language, _LANG_REC_DEFAULT)
+    return getattr(LangRec, name)
+
+
+def _rapidocr_build_engine(config: RouterConfig) -> dict[str, Any]:
+    """Build the rapidocr params dict for the configured recipe.
+
+    Public for tests. Does not instantiate the engine — that is the job of
+    ``_rapidocr_get_engine``. Returns a dict of dotted keys suitable for
+    ``RapidOCR(params=...)``.
+
+    Recipe defaults — the SOTA combo validated in TKT-OC-02 on pzu:
+    Det PP-OCRv6 small (multilingual) + Rec PP-OCRv5 mobile. Rec language
+    comes from ``routing.language``; with no hint we fall back to ESLAV
+    (project's primary corpus).
+    """
+    from rapidocr import EngineType, LangDet, ModelType, OCRVersion
+
+    params = config.routing.ocr_fallback_params or {}
+    det_model_type = str(params.get("det_model_type", "small"))
+    rec_model_type = str(params.get("rec_model_type", "mobile"))
+
+    return {
+        "Global.use_cls": False,
+        "Det.engine_type": EngineType.ONNXRUNTIME,
+        "Det.ocr_version": OCRVersion.PPOCRV6,
+        "Det.model_type": getattr(ModelType, det_model_type.upper()),
+        "Det.lang_type": LangDet.CH,  # v6 det is one multilingual model
+        "Rec.engine_type": EngineType.ONNXRUNTIME,
+        "Rec.ocr_version": OCRVersion.PPOCRV5,
+        "Rec.model_type": getattr(ModelType, rec_model_type.upper()),
+        "Rec.lang_type": _rapidocr_language(config),
+    }
+
+
+def _rapidocr_get_engine(config: RouterConfig):
+    """Construct (or fetch cached) RapidOCR engine for the configured recipe.
+
+    Module-level cache — model init (even warm, from the ModelScope cache)
+    takes ~0.6s and loads two ONNX sessions; doing that on every page
+    would be wasteful. Keyed by the resolved recipe so a params change
+    creates a fresh engine instead of silently reusing the old one.
+    """
+    params = _rapidocr_build_engine(config)
+    cache_key = tuple(sorted(params.items()))
+    cached = _RAPIDOCR_ENGINE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    from rapidocr import RapidOCR
+
+    engine = RapidOCR(params=params)
+    _RAPIDOCR_ENGINE_CACHE[cache_key] = engine
+    return engine
+
+
+def _ocr_rapidocr(pdf_path: str, page_idx: int, config: RouterConfig) -> str:
+    """OCR via RapidOCR (RapidAI) on onnxruntime.
+
+    Renders the page with pymupdf and feeds the numpy RGB array to the
+    engine. Result boxes are already y-sorted; v1 reading order is a plain
+    join of lines (column interleaving on drawings is acceptable — see
+    wayfinder map).
+
+    Tuning knobs (all in ``routing.ocr_fallback_params``):
+    - ``dpi`` (default 150): raster resolution. Probe showed OCR time is
+      roughly dpi-independent (24-40s/page CPU-only) while 100 hallucinates.
+    - ``det_model_type`` / ``rec_model_type``: "small"/"mobile" by default;
+      "tiny"/"medium"/"server" variants exist for tuning.
+
+    Language hint comes from ``routing.language`` via ``_rapidocr_language``
+    (not from this function's params).
+    """
+    import numpy as np
+    import pymupdf
+
+    params = config.routing.ocr_fallback_params or {}
+    dpi = int(params.get("dpi", 150))
+
+    try:
+        engine = _rapidocr_get_engine(config)
+    except Exception as exc:
+        raise OcrError(f"rapidocr engine init failed: {exc}") from exc
+
+    doc = pymupdf.open(pdf_path)
+    try:
+        if not 0 <= page_idx < doc.page_count:
+            raise OcrError(f"page index {page_idx} out of range")
+        page = doc[page_idx]
+        pix = page.get_pixmap(dpi=dpi, alpha=False)
+        img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+            pix.height, pix.width, pix.n
+        )
+        if pix.n == 4:
+            img = img[:, :, :3]
+    finally:
+        doc.close()
+
+    try:
+        result = engine(img)
+    except Exception as exc:
+        raise OcrError(f"rapidocr inference failed: {exc}") from exc
+
+    lines = [str(t) for t in (result.txts or []) if str(t).strip()]
+    if not lines:
+        raise OcrError(f"page {page_idx + 1}: empty rapidocr result")
+    return "\n".join(lines)
 
 
 def _ocr_pdf_inspector(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
@@ -333,13 +479,20 @@ def ocr_page(
         OcrError: if the engine is unknown, unavailable, or returns empty/fails.
 
     The engine name comes from ``config.routing.ocr_fallback_engine`` (default
-    ``pdf_inspector_ocr``). Params come from the matching ``OCRAdapterSpec`` in
-    ``config.ocr_specs``; if not found, an empty dict is used.
+    ``rapidocr``). Params come from ``routing.ocr_fallback_params`` or the
+    matching ``OCRAdapterSpec`` in ``config.ocr_specs``; if not found, an
+    empty dict is used.
     """
     engine = config.routing.ocr_fallback_engine
     params = _lookup_params(config, engine)
 
-    if engine == "pdf_inspector_ocr":
+    if engine == "rapidocr":
+        # rapidocr reads its own knobs (dpi, det/rec model_type) from
+        # config.routing.ocr_fallback_params and the language hint from
+        # config.routing.language; the dispatcher does not plumb either.
+        md = _ocr_rapidocr(pdf_path, page_idx, config)
+        return md, engine
+    elif engine == "pdf_inspector_ocr":
         md = _ocr_pdf_inspector(pdf_path, page_idx, params)
         return md, engine
     elif engine == "tesseract":

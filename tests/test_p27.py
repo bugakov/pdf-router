@@ -18,23 +18,24 @@ from pdf_router.ir import SrcTool
 RUNTIME = Path("/home/scanum/pdf-router/.runtime")
 
 
-def test_p27_default_config_no_ocr_engine(p27_pdf) -> None:
-    """Default config: pdf_inspector_ocr is the fallback engine but not configured
-    (no params). ocr_page() raises OcrError → page.error set, src_tool = PDF_INSPECTOR_OCR."""
+@pytest.mark.slow
+@pytest.mark.slow
+def test_p27_default_config_uses_rapidocr(p27_pdf) -> None:
+    """Default config: rapidocr is the fallback engine. It should succeed on p27
+    (image_based scan with Russian text)."""
     config = RouterConfig()
     ir, report = process_pdf(str(p27_pdf), config)
 
     assert ir.metadata.pdf_type == "image_based"
     assert len(ir.pages) == 1
     page = ir.pages[0]
-    assert page.src_tool is SrcTool.PDF_INSPECTOR_OCR  # v0.3: set before OCR attempt
-    assert page.error is not None
-    assert "pdf_inspector_ocr_failed" in page.error
-    assert page.markdown == ""
-    assert report.pages_failed == 1
-    assert report.pages_native == 0
+    assert page.src_tool is SrcTool.RAPIDOCR
+    assert page.error is None
+    assert page.markdown.strip()
+    assert report.pages_ocr == 1
 
 
+@pytest.mark.slow
 def test_p27_with_tesseract(p27_pdf) -> None:
     """v0.3: routing.ocr_fallback_engine = "tesseract" instead of ocr_specs."""
     config = RouterConfig()

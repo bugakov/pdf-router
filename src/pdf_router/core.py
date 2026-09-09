@@ -130,10 +130,17 @@ def _process_text_for_page(page, pdf_path: str, config: RouterConfig) -> None:
     needs_ocr_from_inspector = page.needs_ocr
 
     if not needs_ocr_from_inspector:
-        # Aggregate text from all blocks.
-        page_text = "\n".join(
+        # page.markdown holds the FULL native text of the page; blocks carry
+        # only structural elements (tables/headings) parsed out of that same
+        # markdown. So markdown is the primary source for the quality check;
+        # blocks are a defensive fallback (they cannot be a superset).
+        # NB: the old `blocks or markdown` order starved the check to
+        # table-cells-only on pages whose markdown was perfectly clean
+        # (e.g. pzu p4: 16 chars of doc-number blocks hid 2502 clean chars).
+        blocks_text = "\n".join(
             b.text for b in page.blocks if hasattr(b, "text")
-        ).strip() or page.markdown or ""
+        ).strip()
+        page_text = (page.markdown or "").strip() or blocks_text or ""
 
         if looks_like_text(
             page_text,
@@ -141,6 +148,9 @@ def _process_text_for_page(page, pdf_path: str, config: RouterConfig) -> None:
             threshold=config.routing.text_alpha_threshold,
         ):
             return  # native text is fine
+        page.ocr_reason = "low_text_quality"
+    else:
+        page.ocr_reason = "inspector_needs_ocr"
 
     # Fall through: rasterize + OCR.
     # Set src_tool BEFORE the call so it is correct even on failure.

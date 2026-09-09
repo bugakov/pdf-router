@@ -6,9 +6,12 @@ Tests updated: tesseract now requires explicit routing.ocr_fallback_engine = "te
 
 import json
 
+import pytest
+
 from pdf_router import cli
 
 
+@pytest.mark.slow
 def test_p27_e2e_no_ocr(p27_pdf, tmp_path, monkeypatch) -> None:
     """p27 is image_based. Default pdf_inspector_ocr runs but fails (missing libs).
     In v0.3 there is no way to skip OCR entirely — it is always attempted."""
@@ -26,6 +29,7 @@ def test_p27_e2e_no_ocr(p27_pdf, tmp_path, monkeypatch) -> None:
         assert page["src_tool"] == "pdf_inspector_ocr"
 
 
+@pytest.mark.slow
 def test_p27_e2e_with_tesseract(p27_pdf, tmp_path, monkeypatch) -> None:
     """v0.3: tesseract requires explicit routing.ocr_fallback_engine = "tesseract"."""
     monkeypatch.chdir(tmp_path)

@@ -5,8 +5,10 @@ description = "Ultra-minimal, deterministic, deploy-anywhere PDF to LLM-ready Ma
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "onnxruntime>=1.29.0",
     "pdf-inspector>=1.17",
     "pymupdf>=1.27",
+    "rapidocr[onnxruntime]>=3.9.2",
 ]
 
 [project.scripts]

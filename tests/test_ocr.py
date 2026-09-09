@@ -163,3 +163,67 @@ def test_ocr_page_unknown_engine_raises() -> None:
     cfg.routing.ocr_fallback_engine = "no_such_engine"
     with pytest.raises(OcrError, match="unknown ocr_fallback_engine"):
         ocr_page("/tmp/x.pdf", page_idx=0, config=cfg)
+
+
+def test_default_ocr_fallback_engine_is_rapidocr() -> None:
+    """Default in v0.3+ is rapidocr — best Russian OCR per OC-02 probe."""
+    cfg = RouterConfig()
+    assert cfg.routing.ocr_fallback_engine == "rapidocr"
+
+
+def test_rapidocr_build_engine_uses_v6_det_and_v5_eslav() -> None:
+    """Hard contract: detection = v6 small, recognition = v5 eslav mobile.
+    Server variant does not exist for eslav (validated in OC-02 probe)."""
+    from pdf_router.ocr import _rapidocr_build_engine
+    from rapidocr import EngineType, LangRec, ModelType, OCRVersion
+
+    cfg = RouterConfig()
+    params = _rapidocr_build_engine(cfg)
+
+    # params is a dict with dotted keys
+    assert params["Det.ocr_version"] == OCRVersion.PPOCRV6
+    assert params["Det.model_type"] == ModelType.SMALL
+    assert params["Rec.ocr_version"] == OCRVersion.PPOCRV5
+    assert params["Rec.model_type"] == ModelType.MOBILE
+    assert params["Rec.lang_type"] == LangRec.ESLAV
+    assert params["Global.use_cls"] is False
+
+
+def test_rapidocr_caches_engine_per_recipe() -> None:
+    """Module-level cache — model load is 0.6s cold but 25MB; cache by recipe key."""
+    from pdf_router.ocr import _rapidocr_get_engine
+
+    cfg = RouterConfig()
+    e1 = _rapidocr_get_engine(cfg)
+    e2 = _rapidocr_get_engine(cfg)
+    assert e1 is e2  # same instance, no reload
+
+
+def test_rapidocr_routing_language_ru_maps_to_eslav() -> None:
+    """When routing.language='ru', use eslav (Russian/East-Slavic specialist)."""
+    from rapidocr import LangRec
+    from pdf_router.ocr import _rapidocr_language
+
+    cfg = RouterConfig()
+    cfg.routing.language = "ru"
+    assert _rapidocr_language(cfg) == LangRec.ESLAV
+
+
+def test_rapidocr_routing_language_none_defaults_to_eslav() -> None:
+    """No language hint → default to eslav (most likely Russian corpus)."""
+    from rapidocr import LangRec
+    from pdf_router.ocr import _rapidocr_language
+
+    cfg = RouterConfig()
+    cfg.routing.language = None
+    assert _rapidocr_language(cfg) == LangRec.ESLAV
+
+
+def test_rapidocr_routing_language_en_maps_to_english() -> None:
+    """English corpus → PP-OCRv5 english rec."""
+    from rapidocr import LangRec
+    from pdf_router.ocr import _rapidocr_language
+
+    cfg = RouterConfig()
+    cfg.routing.language = "en"
+    assert _rapidocr_language(cfg) == LangRec.EN

@@ -96,14 +96,20 @@ log_level = "info"          # debug | info | warning | error; default "warning"
 #extract_vector_diagrams = false
 
 # Which OCR engine to call when looks_like_text fails. Must match a
-# configured [ocr.*] section name. Default: "pdf_inspector_ocr".
-# Supported: "pdf_inspector_ocr" (CPU, requires pdfium+onnxruntime),
+# configured [ocr.*] section name. Default: "rapidocr".
+# Supported: "rapidocr" (CPU via onnxruntime, models auto-downloaded),
+#            "pdf_inspector_ocr" (PP-OCRv6 Small via pdf-inspector Rust),
 #            "tesseract" (local, requires tesseract binary),
 #            "glm_ocr" (cloud, requires api_key),
 #            "deepseek_ocr" (cloud, requires api_key).
-#ocr_fallback_engine = "pdf_inspector_ocr"
+#ocr_fallback_engine = "rapidocr"
 
 # Parameters passed to the OCR engine. Required keys depend on the engine.
+# For rapidocr (default): PP-OCRv6 small det + PP-OCRv5 eslav mobile rec
+#   is the only combination that recognizes Cyrillic (validated in TKT-OC-02).
+#   v6 rec has no Cyrillic head at all, and eslav has no server ONNX.
+#   language = "ru"   # routing.language is plumbed here; maps to eslav rec
+#   dpi = 150         # 100 hallucinates, 200+ is slower without quality gain
 # For pdf_inspector_ocr:
 #   pdfium_lib_path = "/abs/path/.runtime/lib/libpdfium.so"
 #   ort_dylib_path = "/abs/path/.runtime/.../libonnxruntime.so"

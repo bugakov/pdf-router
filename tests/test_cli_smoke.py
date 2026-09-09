@@ -50,6 +50,7 @@ def _expected_doc_id() -> str:
     return doc_id_from_path(str(PZU))
 
 
+@pytest.mark.slow
 def test_cli_subprocess_writes_three_outputs(tmp_path, monkeypatch) -> None:
     """Invoke pdf-router as a real subprocess (the binary, not the Python API)."""
     monkeypatch.chdir(tmp_path)
@@ -79,6 +80,7 @@ def test_cli_subprocess_writes_three_outputs(tmp_path, monkeypatch) -> None:
     assert (out_dir / "pzu_test.chunks.jsonl").is_file()
 
 
+@pytest.mark.slow
 def test_cli_ir_json_has_images_on_multiple_pages(tmp_path, monkeypatch) -> None:
     """Race condition regression: `images` is populated on multiple pages,
     not just the last one."""
@@ -107,6 +109,7 @@ def test_cli_ir_json_has_images_on_multiple_pages(tmp_path, monkeypatch) -> None
     )
 
 
+@pytest.mark.slow
 def test_cli_writes_sidecar_pngs(tmp_path, monkeypatch) -> None:
     """Sidecar layout from RT-12: <output_dir>/<doc-id>/images/*.png"""
     monkeypatch.chdir(tmp_path)
@@ -135,6 +138,7 @@ def test_cli_writes_sidecar_pngs(tmp_path, monkeypatch) -> None:
         assert p.stat().st_size > 0, f"empty PNG: {p}"
 
 
+@pytest.mark.slow
 def test_cli_chunks_propagate_images(tmp_path, monkeypatch) -> None:
     """chunks.jsonl must include `images` for each chunk (RT-13)."""
     monkeypatch.chdir(tmp_path)

@@ -209,6 +209,56 @@ def test_rapidocr_routing_language_ru_maps_to_eslav() -> None:
     assert _rapidocr_language(cfg) == LangRec.ESLAV
 
 
+def test_rapidocr_engine_init_is_race_free(monkeypatch) -> None:
+    """Concurrent first use must build the engine exactly once.
+
+    Regression: on the pzu benchmark rapidocr initialized twice (one
+    "Using ..." init pair per ThreadPoolExecutor worker) because
+    _rapidocr_get_engine checked the cache without a lock.
+    """
+    import threading
+    import time
+
+    from pdf_router import ocr as ocr_mod
+
+    # Unique recipe so the test cache key collides with nothing.
+    monkeypatch.setattr(
+        ocr_mod, "_rapidocr_build_engine", lambda cfg: {"__race_test__": "1"}
+    )
+
+    fake_rapidocr = MagicMock()
+
+    def slow_build(*args, **kwargs):
+        time.sleep(0.2)  # widen the race window
+        return object()
+
+    fake_rapidocr.RapidOCR.side_effect = slow_build
+
+    cfg = RouterConfig()
+    cache_key = (("__race_test__", "1"),)
+
+    ocr_mod._RAPIDOCR_ENGINE_CACHE.pop(cache_key, None)
+    try:
+        with patch.dict("sys.modules", {"rapidocr": fake_rapidocr}):
+            barrier = threading.Barrier(8)
+            results = []
+
+            def worker():
+                barrier.wait()
+                results.append(ocr_mod._rapidocr_get_engine(cfg))
+
+            threads = [threading.Thread(target=worker) for _ in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+        assert len(results) == 8
+        assert all(r is results[0] for r in results)
+        assert fake_rapidocr.RapidOCR.call_count == 1
+    finally:
+        ocr_mod._RAPIDOCR_ENGINE_CACHE.pop(cache_key, None)
+
 def test_rapidocr_routing_language_none_defaults_to_eslav() -> None:
     """No language hint → default to eslav (most likely Russian corpus)."""
     from rapidocr import LangRec

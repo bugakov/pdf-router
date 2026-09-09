@@ -21,6 +21,7 @@ Engines supported:
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,15 @@ def _lookup_params(config: RouterConfig, engine: str) -> dict[str, Any]:
 # every page would be wasteful. Keyed by the resolved recipe so a params
 # change creates a fresh engine instead of silently reusing the old one.
 _RAPIDOCR_ENGINE_CACHE: dict[tuple, Any] = {}
+
+# Guards lazy engine construction. `process_pdf` fans pages out to a
+# ThreadPoolExecutor, so two OCR pages can reach `_rapidocr_get_engine`
+# concurrently; without this lock both threads miss the cache and both
+# build the engine (duplicate 25MB ONNX session loads, plus one
+# "Using ..." init pair per worker — observed on the pzu benchmark).
+# The lock also serializes RapidOCR(...) construction itself, which is
+# not guaranteed thread-safe (ONNX session creation).
+_RAPIDOCR_ENGINE_LOCK = threading.Lock()
 
 # routing.language -> rapidocr LangRec. Det is always the multilingual v6
 # model (LangDet.CH in rapidocr terms); only Rec is language-sensitive.
@@ -132,15 +142,26 @@ def _rapidocr_get_engine(config: RouterConfig):
     """
     params = _rapidocr_build_engine(config)
     cache_key = tuple(sorted(params.items()))
+
+    # Fast path: cache hit without the lock. dict.get is atomic under
+    # the GIL, so this is safe and keeps the common (warm) case free of
+    # lock contention.
     cached = _RAPIDOCR_ENGINE_CACHE.get(cache_key)
     if cached is not None:
         return cached
 
-    from rapidocr import RapidOCR
+    # Slow path: double-checked locking — re-check inside the lock, then
+    # build exactly once even under concurrent first use.
+    with _RAPIDOCR_ENGINE_LOCK:
+        cached = _RAPIDOCR_ENGINE_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
 
-    engine = RapidOCR(params=params)
-    _RAPIDOCR_ENGINE_CACHE[cache_key] = engine
-    return engine
+        from rapidocr import RapidOCR
+
+        engine = RapidOCR(params=params)
+        _RAPIDOCR_ENGINE_CACHE[cache_key] = engine
+        return engine
 
 
 def _ocr_rapidocr(pdf_path: str, page_idx: int, config: RouterConfig) -> str:

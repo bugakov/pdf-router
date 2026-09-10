@@ -20,14 +20,13 @@ Structural blocks (IR 0.2):
 
 from __future__ import annotations
 
+import logging
 import re
 from collections import Counter
 from typing import Any, Iterable
 
 from pdf_router.ir import (
     BBox,
-    FigureBlock,
-    FormulaBlock,
     HeadingBlock,
     IR,
     Metadata,
@@ -36,6 +35,8 @@ from pdf_router.ir import (
     SrcTool,
     TableBlock,
 )
+
+logger = logging.getLogger("pdf_router")
 
 # Match a markdown table row: | ... | ... |
 _TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
@@ -237,14 +238,18 @@ def extract_ir(path: str) -> IR:
     structure_elements: list[Any] = []
     try:
         structure_elements = pdf_inspector.extract_structure_elements(path)
-    except Exception:
-        structure_elements = []
+    except Exception as exc:
+        # Headings degrade to the font-size fallback; the text path is
+        # unaffected. Must stay visible: a silently missing structure tree
+        # looks identical to a PDF without one.
+        logger.warning("structure-tree pass failed (headings degraded): %s", exc)
 
     text_items: list[Any] = []
     try:
         text_items = pdf_inspector.extract_text_with_positions(path)
-    except Exception:
-        text_items = []
+    except Exception as exc:
+        # Kills both heading sources (structure join + font-size fallback).
+        logger.warning("text-positions pass failed (headings degraded): %s", exc)
 
     text_items_by_mcid: dict[tuple[int, int], list[Any]] = {}
     for it in text_items:
@@ -252,7 +257,6 @@ def extract_ir(path: str) -> IR:
             text_items_by_mcid.setdefault((it.page, it.mcid), []).append(it)
 
     headings_by_page_struct = _headings_from_structure_tree(structure_elements, text_items_by_mcid)
-    pages_with_struct_headings = set(headings_by_page_struct.keys())
 
     pages: list[PageResult] = []
     for pm in pages_result.pages:

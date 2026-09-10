@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from pdf_router.config import RouterConfig
@@ -37,6 +37,7 @@ class ProcessingReport:
     pages_native: int = 0
     pages_ocr: int = 0
     pages_failed: int = 0
+    pages_image_failed: int = 0
 
 
 def _engine_to_src_tool(engine: str) -> SrcTool:
@@ -81,33 +82,39 @@ def process_pdf(pdf_path: str, config: RouterConfig) -> tuple[IR, ProcessingRepo
             try:
                 page.images = img_fut.result()
             except Exception as exc:
-                logger.warning("page %d: image extraction failed: %s", page.page + 1, exc)
+                logger.error("page %d: image extraction failed: %s", page.page + 1, exc)
                 page.images = []
+                report.pages_image_failed += 1
 
             # Text processing mutates page.markdown / src_tool / error.
+            # Any unexpected (non-OcrError) exception is recorded on the page:
+            # page.error is None *only* when the page really succeeded.
             try:
                 txt_fut.result()
             except Exception as exc:
-                logger.warning("page %d: text processing failed: %s", page.page + 1, exc)
+                page.error = f"internal_error: {type(exc).__name__}: {exc}"
+                logger.error("page %d: text processing failed: %s", page.page + 1, exc)
 
-    # Aggregate report.
+    # Aggregate report. pages_failed counts ANY page carrying an error —
+    # OCR failures and internal crashes alike (report must not contradict
+    # the IR it describes).
     for page in doc.pages:
-        if page.needs_ocr:
-            if page.error:
-                report.pages_failed += 1
-            else:
-                report.pages_ocr += 1
+        if page.error:
+            report.pages_failed += 1
+        elif page.needs_ocr:
+            report.pages_ocr += 1
         else:
             report.pages_native += 1
 
     elapsed = time.perf_counter() - t0
     logger.info(
-        "processed %d pages in %.1fs: %d native, %d OCR, %d failed",
+        "processed %d pages in %.1fs: %d native, %d OCR, %d failed, %d image-failed",
         report.pages_total,
         elapsed,
         report.pages_native,
         report.pages_ocr,
         report.pages_failed,
+        report.pages_image_failed,
     )
     return doc, report
 

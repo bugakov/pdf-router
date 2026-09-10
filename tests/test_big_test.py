@@ -1,7 +1,7 @@
 """Ticket 11: end-to-end CLI run on big_test.pdf (44p, mixed).
 
-v0.3: pdf_inspector_ocr is the default fallback engine.
-OCR pages are processed (may fail if libs not configured, but don't fail the run).
+Default engine (rapidocr) runs the 10 OCR pages; in this environment they
+succeed, so the run is a full success (exit 0).
 """
 
 import json
@@ -17,9 +17,9 @@ def test_big_test_e2e_cli(big_test_pdf, tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     out_dir = tmp_path / "out_big"
     code = cli.main(["--out", str(out_dir), str(big_test_pdf)])
-    # v0.3: exit 1 if any page failed (OCR may fail due to missing libs)
-    # v0.2: exit 2 if OCR pages were skipped (no engine configured)
-    assert code == 1  # pages failed due to missing pdfium/ort libs
+    # Default rapidocr handles all 10 OCR pages in this env → full success.
+    # (exit 2 would mean >=1 page failed; exit 1 is usage/IO errors only.)
+    assert code == 0
 
     ir_d = json.loads((out_dir / "big_test.ir.json").read_text(encoding="utf-8"))
     assert ir_d["metadata"]["pdf_type"] == "mixed"

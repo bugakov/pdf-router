@@ -1,8 +1,4 @@
-"""Ticket 11: end-to-end CLI run on p27.pdf — no-OCR and tesseract paths.
-
-v0.3: pdf_inspector_ocr is the default fallback engine.
-Tests updated: tesseract now requires explicit routing.ocr_fallback_engine = "tesseract".
-"""
+"""Ticket 11: end-to-end CLI run on p27.pdf — default (rapidocr) and tesseract paths."""
 
 import json
 
@@ -13,20 +9,18 @@ from pdf_router import cli
 
 @pytest.mark.slow
 def test_p27_e2e_no_ocr(p27_pdf, tmp_path, monkeypatch) -> None:
-    """p27 is image_based. Default pdf_inspector_ocr runs but fails (missing libs).
-    In v0.3 there is no way to skip OCR entirely — it is always attempted."""
+    """p27 is image_based. Default engine (rapidocr) runs the fallback and
+    succeeds → full success, exit 0."""
     monkeypatch.chdir(tmp_path)
     out_dir = tmp_path / "out27"
     code = cli.main(["--out", str(out_dir), str(p27_pdf)])
-    # v0.3: pdf_inspector_ocr runs and fails → pages_failed > 0 → exit 1
-    assert code == 1
+    assert code == 0
     ir_d = json.loads((out_dir / "p27.ir.json").read_text(encoding="utf-8"))
     assert ir_d["metadata"]["pdf_type"] == "image_based"
-    for page in ir_d["pages"]:
-        # v0.3: engine IS configured, but fails. Error is set, not "no_ocr_configured"
-        assert page["error"] is not None
-        assert page["error"] != "no_ocr_configured"
-        assert page["src_tool"] == "pdf_inspector_ocr"
+    page = ir_d["pages"][0]
+    assert page["error"] is None
+    assert page["src_tool"] == "rapidocr"
+    assert page["markdown"].strip()
 
 
 @pytest.mark.slow

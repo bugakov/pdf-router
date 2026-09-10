@@ -138,7 +138,19 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if report.pages_failed > 0:
-        return 1  # Some pages failed
+        # Partial success: outputs are written, but some pages failed.
+        # Exit 2 (distinct from 1 = nothing happened). List every failed
+        # page on stderr so the failure is visible without reading ir.json.
+        for page in ir.pages:
+            if page.error:
+                print(f"error: page {page.page + 1}: {page.error}", file=sys.stderr)
+        print(
+            f"error: {report.pages_failed} of {report.pages_total} page(s) failed"
+            f" ({report.pages_image_failed} with image extraction failure);"
+            " outputs written",
+            file=sys.stderr,
+        )
+        return 2
     return 0
 
 

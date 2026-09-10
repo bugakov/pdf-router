@@ -151,7 +151,8 @@ upstream data for it. See
 
 - `0` — full success.
 - `1` — usage / IO error (file not found, invalid config).
-- `2` — partial success (at least one page failed but pipeline completed).
+- `2` — partial success (at least one page failed but pipeline completed);
+  every failed page is listed on stderr, outputs are still written.
 - `3` — total failure (pdf-inspector raised on the document itself).
 
 ## Project layout

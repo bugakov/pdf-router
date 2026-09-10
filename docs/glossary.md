@@ -68,9 +68,19 @@ adapters (`tests/test_conventions.py:37` enforces this).
 
 ## Router
 
-The orchestrator class (`src/pdf_router/core.py:59`) that loads a PDF once
-via the always-loaded pdf-inspector adapter, fans OCR out per page over
-the configured `[ocr.*]` chain, and returns a complete IR.
+The orchestrator: flat `process_pdf(pdf_path, config)` in
+`src/pdf_router/core.py:47` — loads a PDF once via the always-loaded
+pdf-inspector adapter, fans text/OCR and image extraction out per page over
+a thread pool, and returns a complete IR plus a `ProcessingReport`.
+
+## Public API
+
+The embedding surface: everything re-exported by `pdf_router/__init__.py`
+from `src/pdf_router/api.py` — `convert` (one call → Markdown),
+`process_pdf` (IR + report), `render_markdown`/`render_chunks`/`render_json`,
+`write_outputs`, `load_config`, plus the IR/config types. Submodules are
+implementation details; `tests/test_api.py` pins the contract (including the
+no-heavy-imports-at-startup rule).
 
 ## SrcTool
 

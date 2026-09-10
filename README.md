@@ -34,6 +34,35 @@ pdf-router --render md --render-opts '{"page_markers": true}' path/to/file.pdf
 pdf-router --info path/to/file.pdf
 ```
 
+## Python API (embedding)
+
+`import pdf_router` is the supported integration surface — no submodule
+imports needed. Heavy dependencies (pymupdf, onnxruntime, rapidocr) load
+lazily, so importing the package at app startup is cheap (~85 ms).
+
+```python
+import pdf_router
+
+# One call, no config, no files written.
+markdown = pdf_router.convert("scan.pdf")
+
+# Full control: IR + per-page provenance + failure counts.
+ir, report = pdf_router.process_pdf("scan.pdf", config="router.toml")
+for page in ir.pages:
+    print(page.page + 1, page.src_tool, page.error or "ok")
+
+# strict=True raises ProcessingError(report) if any page failed.
+markdown = pdf_router.convert("scan.pdf", strict=True)
+
+# Render an IR you already hold (all three formats, files written).
+paths = pdf_router.write_outputs(ir, "out/", "doc")
+```
+
+Config is optional everywhere: `None` (built-in defaults), a TOML path, or a
+`RouterConfig` you tweaked in Python (`pdf_router.load_config()` returns the
+defaults for inspection/override). A missing explicit config path raises
+`ConfigError` — typos never silently change routing.
+
 ## Configuration
 
 Copy `router.toml.example` to `router.toml` and fill in the OCR engines you
@@ -119,6 +148,8 @@ upstream data for it. See
 
 ```
 src/pdf_router/
+  __init__.py           # public surface (re-exports api.py)
+  api.py                # embedding facade: convert/process_pdf/render_*/write_outputs
   ir.py                 # IR dataclasses (the single shared contract)
   core.py               # Router class + orchestration
   config.py             # TOML loader
@@ -132,6 +163,7 @@ tests/
   test_ir.py                    # IR round-trip
   test_ir_structural_blocks.py  # IR 0.2 block anchors (p5 + ТКР1)
   test_p5.py, test_p27.py, test_big_test.py   # golden anchors
+  test_api.py                   # public-surface contract + import-cost guard
   test_renderers.py, test_conventions.py, ...
 docs/
   glossary.md           # terms

@@ -16,8 +16,8 @@ import sys
 from pathlib import Path
 
 from pdf_router import __version__
-from pdf_router.config import ConfigError, RendererConfig, RouterConfig
-from pdf_router.ir import IR
+from pdf_router.config import ConfigError, RouterConfig
+from pdf_router.api import write_outputs
 
 logger = logging.getLogger("pdf_router")
 
@@ -68,26 +68,6 @@ def _parse_renderers(raw: str | None) -> set[str] | None:
     if not requested:
         raise SystemExit("error: --render must name at least one renderer")
     return requested
-
-
-def _write_outputs(ir: IR, out_dir: Path, stem: str, enabled: set[str], rcfg: RendererConfig) -> None:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    if "md" in enabled:
-        from pdf_router.renderers import md as md_renderer
-
-        (out_dir / f"{stem}.md").write_text(md_renderer.render(ir, config=rcfg), encoding="utf-8")
-    if "chunks" in enabled:
-        from pdf_router.renderers import chunks as chunks_renderer
-
-        (out_dir / f"{stem}.chunks.jsonl").write_text(
-            chunks_renderer.render(ir, config=rcfg), encoding="utf-8"
-        )
-    if "json" in enabled:
-        from pdf_router.renderers import json_renderer
-
-        (out_dir / f"{stem}.ir.json").write_text(
-            json_renderer.render(ir, config=rcfg), encoding="utf-8"
-        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -152,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     try:
-        _write_outputs(ir, cfg.renderers.output_dir, input_path.stem, cfg.renderers.enabled, cfg.renderers)
+        write_outputs(ir, cfg.renderers.output_dir, input_path.stem, config=cfg.renderers)
     except OSError as exc:
         print(f"error: cannot write output: {exc}", file=sys.stderr)
         return 1

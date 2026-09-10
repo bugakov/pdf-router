@@ -1,0 +1,260 @@
+"""Public facade — the supported way to embed pdf-router in an application.
+
+Everything re-exported by ``pdf_router/__init__.py`` lives here. The point of
+this module is that a caller needs **no knowledge of the package internals**:
+no ``core``, no ``config`` imports, no dataclass construction. The happy path
+is one call::
+
+    import pdf_router
+
+    markdown = pdf_router.convert("scan.pdf")
+
+Three levels of control, in increasing depth:
+
+1. :func:`convert` — one call, returns Markdown. For the 90% case.
+2. :func:`process_pdf` — returns ``(IR, ProcessingReport)``. For callers that
+   need provenance, per-page images, or failure counts.
+3. :func:`render_markdown` / :func:`render_chunks` / :func:`render_json` —
+   render an IR you already hold (e.g. one loaded via :func:`from_dict`).
+
+Two rules this module exists to enforce:
+
+- **Config is optional and polymorphic.** Every entry point accepts
+  ``None | str | Path | RouterConfig``. ``None`` means built-in defaults, so a
+  caller never has to import ``RouterConfig`` just to get going.
+- **Import must stay cheap.** Nothing here may import a heavy dependency
+  (pymupdf, onnxruntime, rapidocr, requests, pdf_inspector) at module scope —
+  ``tests/test_api.py::test_public_import_pulls_no_heavy_deps`` guards it.
+  Downstream apps import pdf-router at startup; a 3-second import is a bug.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from pdf_router.config import (
+    ConfigError,
+    RendererConfig,
+    RouterConfig,
+)
+from pdf_router.core import ProcessingReport, process_pdf as _pipeline
+from pdf_router.ir import (
+    IR,
+    IR_VERSION,
+    Metadata,
+    PageResult,
+    SrcTool,
+    from_dict,
+    to_dict,
+)
+
+__all__ = [
+    "ConfigError",
+    "ProcessingError",
+    "ProcessingReport",
+    "convert",
+    "load_config",
+    "process_pdf",
+    "render_chunks",
+    "render_json",
+    "render_markdown",
+    "write_outputs",
+    # Re-exported types, so a caller never imports a submodule.
+    "IR",
+    "IR_VERSION",
+    "Metadata",
+    "PageResult",
+    "RendererConfig",
+    "RouterConfig",
+    "SrcTool",
+    "from_dict",
+    "to_dict",
+]
+
+
+class ProcessingError(RuntimeError):
+    """Raised by ``strict=True`` entry points when at least one page failed.
+
+    Carries the :class:`ProcessingReport` so the caller can tell "one page of
+    44 died" from "the whole document is unreadable" without parsing strings.
+    """
+
+    def __init__(self, report: ProcessingReport, message: str | None = None) -> None:
+        self.report = report
+        super().__init__(
+            message
+            or f"{report.pages_failed} of {report.pages_total} page(s) failed"
+        )
+
+
+def _coerce_config(config: str | Path | RouterConfig | None) -> RouterConfig:
+    """Accept any of the four shapes a caller plausibly has.
+
+    - ``None`` → built-in defaults (most common; keeps the happy path trivial).
+    - ``RouterConfig`` → used as-is.
+    - ``str`` / ``Path`` → loaded from TOML.
+
+    Unlike :meth:`RouterConfig.from_toml`, an explicit path that does not
+    exist is an error rather than a silent fall back to defaults: a typo in a
+    config path must not quietly change routing behaviour in production.
+    """
+    if config is None:
+        return RouterConfig()
+    if isinstance(config, RouterConfig):
+        return config
+    if isinstance(config, (str, Path)):
+        path = Path(config)
+        if not path.exists():
+            raise ConfigError(f"config file not found: {path}")
+        return RouterConfig.from_toml(path)
+    raise ConfigError(
+        f"config must be None, a path, or RouterConfig; got {type(config).__name__}"
+    )
+
+
+def _coerce_renderer_config(config: RendererConfig | RouterConfig | None) -> RendererConfig:
+    """Renderers take a ``RendererConfig``; callers often hold a ``RouterConfig``."""
+    if config is None:
+        return RendererConfig()
+    if isinstance(config, RouterConfig):
+        return config.renderers
+    if isinstance(config, RendererConfig):
+        return config
+    raise ConfigError(
+        f"renderer config must be RendererConfig or RouterConfig; got {type(config).__name__}"
+    )
+
+
+def load_config(path: str | Path | None = None) -> RouterConfig:
+    """Load a :class:`RouterConfig` from a TOML file.
+
+    ``path=None`` returns built-in defaults — the same object shape a caller
+    would get from an empty file, so defaults are inspectable and overridable
+    in Python::
+
+        cfg = pdf_router.load_config()
+        cfg.routing.language = "ru"
+        md = pdf_router.convert("scan.pdf", config=cfg)
+
+    Raises:
+        ConfigError: if the path is given but missing, or the TOML is invalid.
+    """
+    return _coerce_config(path)
+
+
+def process_pdf(
+    pdf_path: str | Path,
+    *,
+    config: str | Path | RouterConfig | None = None,
+    strict: bool = False,
+) -> tuple[IR, ProcessingReport]:
+    """Run the full routing pipeline. Returns ``(IR, ProcessingReport)``.
+
+    This is the deep entry point: everything :func:`convert` does, plus the
+    IR (provenance, structural blocks, per-page images) and the report
+    (native/OCR/failed counts).
+
+    Args:
+        pdf_path: path to the PDF.
+        config: ``None``, a TOML path, or a :class:`RouterConfig`.
+        strict: raise :class:`ProcessingError` if any page failed. Default
+            ``False`` reproduces the CLI's best-effort behaviour: failed pages
+            carry ``PageResult.error`` and the rest of the document is fine.
+
+    Raises:
+        ConfigError: bad ``config``.
+        ProcessingError: ``strict=True`` and >=1 page failed.
+    """
+    cfg = _coerce_config(config)
+    ir, report = _pipeline(str(pdf_path), cfg)
+    if strict and report.pages_failed:
+        raise ProcessingError(report)
+    return ir, report
+
+
+def convert(
+    pdf_path: str | Path,
+    *,
+    config: str | Path | RouterConfig | None = None,
+    strict: bool = False,
+) -> str:
+    """Convert a PDF to LLM-ready Markdown in one call.
+
+    ``pdf_router.convert("scan.pdf")`` is the whole integration. Writes no
+    files and needs no configuration.
+
+    Raises:
+        ConfigError: bad ``config``.
+        ProcessingError: ``strict=True`` and >=1 page failed. Without
+            ``strict``, a failed page simply contributes an empty section.
+    """
+    ir, _ = process_pdf(pdf_path, config=config, strict=strict)
+    return render_markdown(ir, config=config)
+
+
+def render_markdown(ir: IR, *, config: RendererConfig | RouterConfig | None = None) -> str:
+    """Render an IR to a single Markdown string."""
+    from pdf_router.renderers import md
+
+    return md.render(ir, config=_coerce_renderer_config(config))
+
+
+def render_chunks(ir: IR, *, config: RendererConfig | RouterConfig | None = None) -> str:
+    """Render an IR to JSONL chunks (one JSON object per line)."""
+    from pdf_router.renderers import chunks
+
+    return chunks.render(ir, config=_coerce_renderer_config(config))
+
+
+def render_json(ir: IR, *, config: RendererConfig | RouterConfig | None = None) -> str:
+    """Render an IR to its JSON serialization."""
+    from pdf_router.renderers import json_renderer
+
+    return json_renderer.render(ir, config=_coerce_renderer_config(config))
+
+
+#: Renderer name -> function producing its text. Order is irrelevant; the
+#: ``enabled`` set in the config decides what is written.
+_RENDERERS = {
+    "md": (render_markdown, ".md"),
+    "chunks": (render_chunks, ".chunks.jsonl"),
+    "json": (render_json, ".ir.json"),
+}
+
+
+def write_outputs(
+    ir: IR,
+    out_dir: str | Path,
+    stem: str,
+    *,
+    config: RendererConfig | RouterConfig | None = None,
+) -> dict[str, Path]:
+    """Write the enabled renderers to ``out_dir`` and return their paths.
+
+    One call replaces the boilerplate of "render three ways, mkdir, write
+    three files". Which renderers run comes from ``config.renderers.enabled``
+    (default: all three).
+
+    Returns:
+        Mapping of renderer name to the written path, e.g.
+        ``{"md": Path("out/doc.md"), ...}`` — handy for logging and tests.
+
+    Raises:
+        OSError: propagated from writing (the caller owns output-path policy).
+    """
+    rcfg = _coerce_renderer_config(config)
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    written: dict[str, Path] = {}
+    for name in sorted(rcfg.enabled or ()):
+        entry = _RENDERERS.get(name)
+        if entry is None:
+            raise ConfigError(
+                f"unknown renderer {name!r}; expected one of {sorted(_RENDERERS)}"
+            )
+        render_fn, suffix = entry
+        path = out / f"{stem}{suffix}"
+        path.write_text(render_fn(ir, config=rcfg), encoding="utf-8")
+        written[name] = path
+    return written

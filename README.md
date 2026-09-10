@@ -65,18 +65,27 @@ defaults for inspection/override). A missing explicit config path raises
 
 ## Configuration
 
-Copy `router.toml.example` to `router.toml` and fill in the OCR engines you
-want. Anything you leave commented out is **not loaded** (not even
-imported). Precedence: CLI flag > `router.toml` > built-in default.
+Copy `router.toml.example` to `router.toml`. `[ocr.<engine>]` sections store
+engine params; exactly **one** engine runs, picked by
+`[routing].ocr_fallback_engine` (default `rapidocr`, which needs no section).
+Sections of unselected engines are validated but otherwise ignored — keep
+keys for several engines and switch by changing one line. Precedence:
+CLI flag > `router.toml` > built-in default.
 
 ```toml
 # router.toml (gitignored)
 [router]
 log_level = "info"
 
+[routing]
+ocr_fallback_engine = "tesseract"
+
 [ocr.tesseract]
 languages = ["rus", "eng"]
 ```
+
+Selecting an engine without its `[ocr.*]` section — or an unknown engine
+name — is a `ConfigError` at load, before any page is processed.
 
 ## Architecture
 
@@ -94,7 +103,8 @@ languages = ["rus", "eng"]
 ```
 
 - **One** `process_pdf` call (always-loaded adapter).
-- **Zero or more** OCR calls per page, in `[ocr.*]` order (fallback chain).
+- **Zero or more** OCR calls per page, via the single configured
+  `[routing].ocr_fallback_engine` (params from its `[ocr.*]` section).
 - **One** set of renderers, each reading the same IR.
 
 See `docs/glossary.md` for terms and `docs/adr/` for design decisions.

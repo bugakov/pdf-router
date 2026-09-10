@@ -2,10 +2,9 @@
 
 One function: ``ocr_page``. No adapter registry, no lazy imports, no Protocol.
 
-Engine-specific params come from the matching ``OCRAdapterSpec`` in
-``RouterConfig.ocr_specs`` (the ``[ocr]`` TOML section) or, with priority,
-from ``routing.ocr_fallback_params``. If neither is set, an empty dict is
-used as a fallback.
+Engine-specific params come from the matching ``[ocr.<engine>]`` section,
+i.e. ``RouterConfig.ocr_engines[engine]``. If no section exists, an empty
+dict is used (rapidocr works on built-in defaults).
 
 Engines supported:
 - ``rapidocr`` — RapidAI RapidOCR on onnxruntime. Default. Recipe for
@@ -36,18 +35,8 @@ class OcrError(RuntimeError):
 
 
 def _lookup_params(config: RouterConfig, engine: str) -> dict[str, Any]:
-    """Find params for engine.
-
-    Priority: routing.ocr_fallback_params (v0.3) > ocr_specs (v0.2 compat).
-    """
-    # v0.3: params passed directly via routing config.
-    if config.routing.ocr_fallback_params:
-        return dict(config.routing.ocr_fallback_params)
-    # v0.2 compat: look up from ocr_specs.
-    for spec in config.ocr_specs:
-        if spec.name == engine:
-            return dict(spec.params)
-    return {}
+    """Params for ``engine``: the matching ``[ocr.<engine>]`` section."""
+    return dict(config.ocr_engines.get(engine, {}))
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +103,7 @@ def _rapidocr_build_engine(config: RouterConfig) -> dict[str, Any]:
     """
     from rapidocr import EngineType, LangDet, ModelType, OCRVersion
 
-    params = config.routing.ocr_fallback_params or {}
+    params = _lookup_params(config, "rapidocr")
     det_model_type = str(params.get("det_model_type", "small"))
     rec_model_type = str(params.get("rec_model_type", "mobile"))
 
@@ -171,7 +160,7 @@ def _ocr_rapidocr(pdf_path: str, page_idx: int, config: RouterConfig) -> str:
     join of lines (column interleaving on drawings is acceptable — see
     wayfinder map).
 
-    Tuning knobs (all in ``routing.ocr_fallback_params``):
+    Tuning knobs (all in the ``[ocr.rapidocr]`` section):
     - ``dpi`` (default 150): raster resolution. Probe showed OCR time is
       roughly dpi-independent (24-40s/page CPU-only) while 100 hallucinates.
     - ``det_model_type`` / ``rec_model_type``: "small"/"mobile" by default;
@@ -183,7 +172,7 @@ def _ocr_rapidocr(pdf_path: str, page_idx: int, config: RouterConfig) -> str:
     import numpy as np
     import pymupdf
 
-    params = config.routing.ocr_fallback_params or {}
+    params = _lookup_params(config, "rapidocr")
     dpi = int(params.get("dpi", 150))
 
     try:
@@ -510,22 +499,21 @@ def ocr_page(
     Args:
         pdf_path: path to the PDF file.
         page_idx: 0-indexed page number.
-        config: full RouterConfig (contains both ``routing`` and ``ocr_specs``).
+        config: full RouterConfig (contains ``routing`` and ``ocr_engines``).
 
     Raises:
         OcrError: if the engine is unknown, unavailable, or returns empty/fails.
 
     The engine name comes from ``config.routing.ocr_fallback_engine`` (default
-    ``rapidocr``). Params come from ``routing.ocr_fallback_params`` or the
-    matching ``OCRAdapterSpec`` in ``config.ocr_specs``; if not found, an
-    empty dict is used.
+    ``rapidocr``). Params come from the matching ``[ocr.<engine>]`` section
+    (``config.ocr_engines[engine]``); if absent, an empty dict is used.
     """
     engine = config.routing.ocr_fallback_engine
     params = _lookup_params(config, engine)
 
     if engine == "rapidocr":
-        # rapidocr reads its own knobs (dpi, det/rec model_type) from
-        # config.routing.ocr_fallback_params and the language hint from
+        # rapidocr reads its own knobs (dpi, det/rec model_type) from the
+        # [ocr.rapidocr] section and the language hint from
         # config.routing.language; the dispatcher does not plumb either.
         md = _ocr_rapidocr(pdf_path, page_idx, config)
         return md, engine

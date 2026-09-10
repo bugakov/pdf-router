@@ -1,7 +1,6 @@
 """Ticket 10: CLI — version, --info, full run, exit codes."""
 
 import json
-from pathlib import Path
 
 from pdf_router import cli
 
@@ -65,6 +64,10 @@ def test_exit_2_when_page_fails(p27_pdf, tmp_path, monkeypatch) -> None:
     cfg.write_text(textwrap.dedent("""\
         [routing]
         ocr_fallback_engine = "pdf_inspector_ocr"
+
+        [ocr.pdf_inspector_ocr]
+        pdfium_lib_path = "/nonexistent/libpdfium.so"
+        ort_dylib_path = "/nonexistent/libonnxruntime.so"
     """))
     monkeypatch.chdir(tmp_path)
     out_dir = tmp_path / "out27"

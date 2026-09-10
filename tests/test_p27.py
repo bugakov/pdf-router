@@ -37,13 +37,12 @@ def test_p27_default_config_uses_rapidocr(p27_pdf) -> None:
 
 @pytest.mark.slow
 def test_p27_with_tesseract(p27_pdf) -> None:
-    """v0.3: routing.ocr_fallback_engine = "tesseract" instead of ocr_specs."""
+    """routing.ocr_fallback_engine = "tesseract"; params in [ocr.tesseract]."""
     config = RouterConfig()
     from pdf_router.config import RoutingConfig
 
     config.routing = RoutingConfig(
         ocr_fallback_engine="tesseract",
-        ocr_fallback_params={"languages": ["eng"]},
         # use defaults for everything else
         language=None,
         text_alpha_threshold=0.3,
@@ -51,6 +50,7 @@ def test_p27_with_tesseract(p27_pdf) -> None:
         extract_raster_photos=False,
         extract_vector_diagrams=False,
     )
+    config.ocr_engines["tesseract"] = {"languages": ["eng"]}
     ir, report = process_pdf(str(p27_pdf), config)
 
     page = ir.pages[0]
@@ -90,13 +90,13 @@ def test_p27_with_pdf_inspector_ocr(p27_pdf) -> None:
     config = RouterConfig()
     config.routing = RoutingConfig(
         ocr_fallback_engine="pdf_inspector_ocr",
-        ocr_fallback_params=params,
         language=None,
         text_alpha_threshold=0.3,
         workers=1,
         extract_raster_photos=False,
         extract_vector_diagrams=False,
     )
+    config.ocr_engines["pdf_inspector_ocr"] = params
     ir, report = process_pdf(str(p27_pdf), config)
 
     page = ir.pages[0]

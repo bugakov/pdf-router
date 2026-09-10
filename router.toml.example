@@ -3,16 +3,25 @@
 # Copy to router.toml, uncomment the sections you need, fill in the values:
 #   cp router.toml.example router.toml && chmod 600 router.toml
 #
-# Rules (DESIGN §6):
+# Rules:
 # - Precedence: CLI flag > this file > built-in defaults.
 # - No env-var lookups for keys — this file is the single source of truth.
-# - An [ocr.*] section that is absent (or commented out) means the adapter
-#   is not loaded at all; pages needing OCR get error="no_ocr_configured".
-# - Multiple [ocr.*] sections form an ordered fallback chain:
-#   TOML order = priority, first adapter returning non-empty text wins.
-# - v0.3 routing: exactly ONE ocr_fallback_engine is used (not the chain).
-#   The [ocr] chain is still loaded for backwards compat; the routing.ocr_fallback_engine
-#   picks which one to call for the fallback OCR pass.
+# - OCR model: [ocr.<engine>] sections STORE engine params; exactly ONE
+#   engine runs, picked by [routing].ocr_fallback_engine. Sections of
+#   unselected engines are validated but otherwise ignored — keep keys for
+#   several engines and switch by changing one line.
+# - Fail fast at load: an unknown ocr_fallback_engine name, or a selected
+#   engine without its [ocr.*] section, is a ConfigError before any page is
+#   processed. rapidocr is exempt — it needs no section at all.
+
+# --- RapidOCR (default) — CPU via onnxruntime, no keys -----------------------
+# Models auto-download from ModelScope on first run, then fully offline.
+# No required keys: an absent section means built-in defaults.
+#[ocr.rapidocr]
+## optional:
+## dpi = 150                 # 100 hallucinates; 200+ slower, no quality gain
+## det_model_type = "small"  # tiny/small/medium/server variants exist
+## rec_model_type = "mobile" # eslav (Cyrillic) head only ships as mobile
 
 [router]
 log_level = "info"          # debug | info | warning | error; default "warning"
@@ -95,8 +104,9 @@ log_level = "info"          # debug | info | warning | error; default "warning"
 # Extract vector diagrams (drawn paths) rendered as PNG. Default: false.
 #extract_vector_diagrams = false
 
-# Which OCR engine to call when looks_like_text fails. Must match a
-# configured [ocr.*] section name. Default: "rapidocr".
+# Which OCR engine to call when looks_like_text fails. Must be a known
+# engine name and have a matching [ocr.*] section (rapidocr needs none).
+# Default: "rapidocr".
 # Supported: "rapidocr" (CPU via onnxruntime, models auto-downloaded),
 #            "pdf_inspector_ocr" (PP-OCRv6 Small via pdf-inspector Rust),
 #            "tesseract" (local, requires tesseract binary),
@@ -104,25 +114,13 @@ log_level = "info"          # debug | info | warning | error; default "warning"
 #            "deepseek_ocr" (cloud, requires api_key).
 #ocr_fallback_engine = "rapidocr"
 
-# Parameters passed to the OCR engine. Required keys depend on the engine.
-# For rapidocr (default): PP-OCRv6 small det + PP-OCRv5 eslav mobile rec
-#   is the only combination that recognizes Cyrillic (validated in TKT-OC-02).
-#   v6 rec has no Cyrillic head at all, and eslav has no server ONNX.
-#   language = "ru"   # routing.language is plumbed here; maps to eslav rec
-#   dpi = 150         # 100 hallucinates, 200+ is slower without quality gain
-# For pdf_inspector_ocr:
-#   pdfium_lib_path = "/abs/path/.runtime/lib/libpdfium.so"
-#   ort_dylib_path = "/abs/path/.runtime/.../libonnxruntime.so"
-#   dpi = 150.0              # raster resolution (100 hallucinates, 200+ slower)
-#   minimum_confidence = 0.0 # 0.8 would cut ~12% text — too aggressive for docs
-#   offline = true           # skip hosted-OCR checks; default: true
-#   model_cache_dir = "/abs/path/to/cache"  # default: ~/.cache/pdf-inspector/models
-#   # The engine runs pdf-inspector's "selective OCR" (mode='auto'): it OCRs only
-#   # pages its own quality signals recommend and keeps native text for the rest.
-#   # We pass page_numbers=[N] to scope each call to one page.
-# For tesseract:
-#   languages = ["eng", "rus"]
-# For glm_ocr:
-#   api_key = "..."
-#   base_url = "https://..."
-#ocr_fallback_params = { pdfium_lib_path = "/abs/path/.runtime/lib/libpdfium.so", ort_dylib_path = "/abs/path/.runtime/onnxruntime-linux-x64-1.27.0/lib/libonnxruntime.so", offline = true }
+# Engine params live in the [ocr.<engine>] sections above, not here —
+# one source of params per engine. Required keys per engine are checked
+# when this file is loaded.
+#   rapidocr:          dpi, det_model_type, rec_model_type
+#   pdf_inspector_ocr: pdfium_lib_path, ort_dylib_path (required);
+#                      dpi, minimum_confidence, offline, model_cache_dir
+#   tesseract:         languages (required); bin, dpi
+#   glm_ocr:           api_key, base_url (required); model, timeout
+#   deepseek_ocr:      api_key, base_url (required); model, upload_url,
+#                      prompt, timeout, max_tokens, dpi

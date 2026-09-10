@@ -1,8 +1,8 @@
 """Tests for OCR dispatcher — RT-06 routing to configured engine.
 
 Covers the A1 implementation: ``pdf_inspector_ocr`` uses
-``process_pdf_with_ocr(mode='auto')`` per-page, with ``offline`` flag
-plumbed through from ``ocr_fallback_params``.
+``process_pdf_with_ocr(mode='auto')`` per-page, with params plumbed
+through from the ``[ocr.<engine>]`` section (``RouterConfig.ocr_engines``).
 """
 
 from __future__ import annotations
@@ -148,7 +148,7 @@ def test_ocr_page_dispatches_to_engine() -> None:
     """
     cfg = RouterConfig()
     cfg.routing.ocr_fallback_engine = "pdf_inspector_ocr"
-    cfg.routing.ocr_fallback_params = {
+    cfg.ocr_engines["pdf_inspector_ocr"] = {
         "pdfium_lib_path": "/nonexistent/libpdfium.so",
         "ort_dylib_path": "/nonexistent/libonnxruntime.so",
     }
@@ -175,7 +175,7 @@ def test_rapidocr_build_engine_uses_v6_det_and_v5_eslav() -> None:
     """Hard contract: detection = v6 small, recognition = v5 eslav mobile.
     Server variant does not exist for eslav (validated in OC-02 probe)."""
     from pdf_router.ocr import _rapidocr_build_engine
-    from rapidocr import EngineType, LangRec, ModelType, OCRVersion
+    from rapidocr import LangRec, ModelType, OCRVersion
 
     cfg = RouterConfig()
     params = _rapidocr_build_engine(cfg)

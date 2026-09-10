@@ -4,12 +4,12 @@ import logging
 
 import pytest
 
-from pdf_router.config import ConfigError, RendererConfig, RouterConfig
+from pdf_router.config import ConfigError, RouterConfig
 
 
 def test_no_file_gives_defaults(tmp_path) -> None:
     cfg = RouterConfig.from_toml(tmp_path / "nonexistent.toml")
-    assert cfg.ocr_specs == []
+    assert cfg.ocr_engines == {}
     assert cfg.log_level == "warning"
     assert cfg.renderers.enabled == {"md", "chunks", "json"}
     assert cfg.renderers.chunks.max_tokens == 512
@@ -18,7 +18,7 @@ def test_no_file_gives_defaults(tmp_path) -> None:
 
 def test_none_gives_defaults() -> None:
     cfg = RouterConfig.from_toml(None)
-    assert cfg.ocr_specs == []
+    assert cfg.ocr_engines == {}
     assert cfg.log_level == "warning"
 
 
@@ -54,9 +54,9 @@ include_page_bbox = true
     cfg = RouterConfig.from_toml(toml)
 
     assert cfg.log_level == "info"
-    assert [s.name for s in cfg.ocr_specs] == ["tesseract", "glm_ocr"]
-    assert cfg.ocr_specs[0].params["languages"] == ["rus", "eng"]
-    assert cfg.ocr_specs[1].params["api_key"] == "sk-test"
+    assert set(cfg.ocr_engines) == {"tesseract", "glm_ocr"}
+    assert cfg.ocr_engines["tesseract"]["languages"] == ["rus", "eng"]
+    assert cfg.ocr_engines["glm_ocr"]["api_key"] == "sk-test"
     assert cfg.renderers.output_dir.as_posix() == "custom_out"
     assert cfg.renderers.page_markers is True
     assert cfg.renderers.chunks.max_tokens == 256
@@ -77,7 +77,11 @@ api_key = "sk-test"
         RouterConfig.from_toml(toml)
 
 
-def test_unknown_adapter_raises(tmp_path) -> None:
+def test_unknown_engine_section_warns_but_loads(tmp_path, caplog) -> None:
+    """Unknown [ocr.*] name is a typo-catcher warning, not an error.
+
+    Params are stored (forward-compat) but the engine cannot be selected.
+    """
     toml = tmp_path / "router.toml"
     toml.write_text(
         """
@@ -86,8 +90,53 @@ foo = "bar"
 """,
         encoding="utf-8",
     )
-    with pytest.raises(ConfigError, match="unknown OCR adapter"):
+    with caplog.at_level(logging.WARNING, logger="pdf_router"):
+        cfg = RouterConfig.from_toml(toml)
+    assert cfg.ocr_engines == {"wat_ocr": {"foo": "bar"}}
+    assert any("unknown OCR engine section" in rec.message for rec in caplog.records)
+
+
+def test_unknown_selector_raises(tmp_path) -> None:
+    """Typo in ocr_fallback_engine is a ConfigError at load, not at OCR time."""
+    toml = tmp_path / "router.toml"
+    toml.write_text(
+        """
+[routing]
+ocr_fallback_engine = "rapidoocr"
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="unknown ocr_fallback_engine"):
         RouterConfig.from_toml(toml)
+
+
+def test_selected_engine_without_section_raises(tmp_path) -> None:
+    """Selecting an engine without its [ocr.*] section fails at load."""
+    toml = tmp_path / "router.toml"
+    toml.write_text(
+        """
+[routing]
+ocr_fallback_engine = "glm_ocr"
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match=r"no \[ocr\.glm_ocr\]"):
+        RouterConfig.from_toml(toml)
+
+
+def test_rapidocr_selected_without_section_loads(tmp_path) -> None:
+    """rapidocr needs no [ocr.*] section — built-in defaults are enough."""
+    toml = tmp_path / "router.toml"
+    toml.write_text(
+        """
+[routing]
+ocr_fallback_engine = "rapidocr"
+""",
+        encoding="utf-8",
+    )
+    cfg = RouterConfig.from_toml(toml)
+    assert cfg.ocr_engines == {}
+    assert cfg.routing.ocr_fallback_engine == "rapidocr"
 
 
 def test_unknown_section_warns_but_loads(tmp_path, caplog) -> None:
@@ -101,7 +150,7 @@ key = "value"
     )
     with caplog.at_level(logging.WARNING, logger="pdf_router"):
         cfg = RouterConfig.from_toml(toml)
-    assert cfg.ocr_specs == []
+    assert cfg.ocr_engines == {}
     assert any("future_thing" in rec.message for rec in caplog.records)
 
 

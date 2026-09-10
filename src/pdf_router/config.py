@@ -1,9 +1,10 @@
-"""TOML config loader and Config dataclasses. DESIGN.md §6.
+"""TOML config loader and Config dataclasses.
 
 Precedence (locked): CLI flag > TOML file > built-in default. There is no
-env-var lookup for keys. All OCR engines are opt-in: a spec absent from the
-config means the adapter is not even imported. Unknown sections/keys log a
-WARNING and are ignored (forward-compat).
+env-var lookup for keys. OCR model: ``[ocr.<engine>]`` sections STORE engine
+params; exactly ONE engine runs, picked by ``[routing].ocr_fallback_engine``.
+Sections of unselected engines are validated but otherwise ignored. Unknown
+sections/keys log a WARNING and are ignored (forward-compat).
 """
 
 from __future__ import annotations
@@ -15,13 +16,17 @@ from typing import Any
 
 logger = logging.getLogger("pdf_router")
 
-#: Known OCR adapter names and their required spec keys (DESIGN §6).
-OCR_SPEC_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
+#: Required keys per OCR engine section. Engines not listed here (rapidocr)
+#: have no required keys and work on built-in defaults.
+OCR_ENGINE_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
     "pdf_inspector_ocr": ("pdfium_lib_path", "ort_dylib_path"),
     "tesseract": ("languages",),
     "glm_ocr": ("api_key", "base_url"),
     "deepseek_ocr": ("api_key", "base_url"),
 }
+
+#: All selectable engine names for ``routing.ocr_fallback_engine``.
+_KNOWN_OCR_ENGINES = {"rapidocr", *OCR_ENGINE_REQUIRED_KEYS}
 
 _KNOWN_TOP_LEVEL = {"router", "ocr", "renderers", "routing"}
 _KNOWN_ROUTER_KEYS = {"log_level"}
@@ -35,33 +40,11 @@ _KNOWN_ROUTING_KEYS = {
     "extract_raster_photos",
     "extract_vector_diagrams",
     "ocr_fallback_engine",
-    "ocr_fallback_params",
 }
 
 
 class ConfigError(Exception):
     """Raised when the TOML config is malformed or misses required keys."""
-
-
-@dataclass(frozen=True)
-class OCRAdapterSpec:
-    """Tagged union of an OCR adapter selection: ``(name, params)``.
-
-    ``name`` is one of :data:`OCR_SPEC_REQUIRED_KEYS`; ``params`` holds the
-    per-adapter options from the TOML section (paths, languages, api keys).
-    """
-
-    name: str
-    params: dict[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        if self.name not in OCR_SPEC_REQUIRED_KEYS:
-            raise ConfigError(
-                f"unknown OCR adapter {self.name!r}; expected one of {sorted(OCR_SPEC_REQUIRED_KEYS)}"
-            )
-        missing = [k for k in OCR_SPEC_REQUIRED_KEYS[self.name] if not self.params.get(k)]
-        if missing:
-            raise ConfigError(f"[ocr.{self.name}] missing required key(s): {', '.join(missing)}")
 
 
 @dataclass
@@ -92,14 +75,19 @@ class RoutingConfig:
     # only combination that actually recognizes Cyrillic (validated in
     # TKT-OC-02; pdf_inspector_ocr's dictionary has zero Cyrillic tokens).
     ocr_fallback_engine: str = "rapidocr"
-    ocr_fallback_params: dict | None = None  # passed to the OCR adapter
 
 
 @dataclass
 class RouterConfig:
-    """Everything the Router needs. Order of ``ocr_specs`` = fallback order."""
+    """Everything the pipeline needs.
 
-    ocr_specs: list[OCRAdapterSpec] = field(default_factory=list)
+    ``ocr_engines`` maps engine name -> params dict, 1:1 with the ``[ocr.*]``
+    TOML sections. The engine actually used is the single
+    ``routing.ocr_fallback_engine``; params of unselected engines are stored
+    but ignored (keep keys for several engines, switch by changing one line).
+    """
+
+    ocr_engines: dict[str, dict[str, Any]] = field(default_factory=dict)
     log_level: str = "warning"
     renderers: RendererConfig = field(default_factory=RendererConfig)
     routing: RoutingConfig = field(default_factory=RoutingConfig)
@@ -129,18 +117,57 @@ class RouterConfig:
         router_section = _section(data, "router", _KNOWN_ROUTER_KEYS)
         log_level = str(router_section.get("log_level", "warning"))
 
-        specs: list[OCRAdapterSpec] = []
+        engines: dict[str, dict[str, Any]] = {}
         ocr_section = data.get("ocr", {})
         if not isinstance(ocr_section, dict):
-            raise ConfigError("[ocr] must be a table of adapter sub-tables")
+            raise ConfigError("[ocr] must be a table of engine sub-tables")
         for name, params in ocr_section.items():
             if not isinstance(params, dict):
                 raise ConfigError(f"[ocr.{name}] must be a table")
-            specs.append(OCRAdapterSpec(name=name, params=dict(params)))
+            if name not in _KNOWN_OCR_ENGINES:
+                logger.warning(
+                    "unknown OCR engine section [ocr.%s] (known: %s); params "
+                    "stored, but the engine cannot be selected",
+                    name,
+                    ", ".join(sorted(_KNOWN_OCR_ENGINES)),
+                )
+            else:
+                missing = [
+                    k for k in OCR_ENGINE_REQUIRED_KEYS.get(name, ()) if not params.get(k)
+                ]
+                if missing:
+                    raise ConfigError(
+                        f"[ocr.{name}] missing required key(s): {', '.join(missing)}"
+                    )
+            engines[name] = dict(params)
 
         renderers = _parse_renderers(data.get("renderers", {}))
         routing = _parse_routing(data.get("routing", {}))
-        return cls(ocr_specs=specs, log_level=log_level, renderers=renderers, routing=routing)
+        _validate_ocr_selection(engines, routing)
+        return cls(ocr_engines=engines, log_level=log_level, renderers=renderers, routing=routing)
+
+
+def _validate_ocr_selection(
+    engines: dict[str, dict[str, Any]], routing: RoutingConfig
+) -> None:
+    """Fail fast on the OCR selector: known name, configured section.
+
+    Catches at load time what otherwise surfaces as ``OcrError`` on the
+    first page that needs OCR. rapidocr is exempt from the section check —
+    it has no required keys and works on built-in defaults.
+    """
+    engine = routing.ocr_fallback_engine
+    if engine not in _KNOWN_OCR_ENGINES:
+        raise ConfigError(
+            f"[routing] unknown ocr_fallback_engine {engine!r}; "
+            f"expected one of {sorted(_KNOWN_OCR_ENGINES)}"
+        )
+    if engine != "rapidocr" and engine not in engines:
+        required = ", ".join(OCR_ENGINE_REQUIRED_KEYS[engine])
+        raise ConfigError(
+            f"[routing] ocr_fallback_engine = {engine!r} but no [ocr.{engine}] "
+            f"section; add one (required key(s): {required})"
+        )
 
 
 def _warn_unknown(present: Any, known: set[str], where: str) -> None:
@@ -207,10 +234,5 @@ def _parse_routing(sec: Any) -> RoutingConfig:
         cfg.extract_vector_diagrams = bool(sec["extract_vector_diagrams"])
     if "ocr_fallback_engine" in sec:
         cfg.ocr_fallback_engine = str(sec["ocr_fallback_engine"])
-    if "ocr_fallback_params" in sec:
-        params = sec["ocr_fallback_params"]
-        if not isinstance(params, dict):
-            raise ConfigError("[routing.ocr_fallback_params] must be an inline table")
-        cfg.ocr_fallback_params = dict(params)
 
     return cfg

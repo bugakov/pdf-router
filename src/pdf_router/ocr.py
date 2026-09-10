@@ -25,9 +25,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from pdf_router.config import OCRAdapterSpec, RouterConfig
-from pdf_router.ir import SrcTool
-from pdf_router.rasterize import rasterize_page, RasterizeError
+from pdf_router.config import RouterConfig
+from pdf_router.rasterize import rasterize_page
 
 logger = logging.getLogger("pdf_router")
 
@@ -333,6 +332,15 @@ def _ocr_glm(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
     Renders page to a single-page PDF (PyMuPDF insert_pdf) and POSTs it as
     base64 data-URL. Returns markdown from ``md_results``.
     Requires ``api_key`` in params; ``base_url`` defaults to Z.ai endpoint.
+
+    Empirical notes (live-tested 2026-08-27, from the retired adapter):
+    - A **coding-plan key** gets 429 "Insufficient balance" on the standard
+      endpoint — document parsing is billed separately. Use a key with the
+      document/resource package.
+    - ``md_results`` is whole-document markdown; a single-page input maps
+      1:1 to the requested page (~1.8k tokens/page).
+    - Known limitation: Cyrillic in dense stamps gets garbled («Страптельство»
+      for «Строительство») — fine for body text, verify stamps.
     """
     import base64
 
@@ -392,6 +400,14 @@ def _ocr_deepseek(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
 
     Renders page to PNG (200 DPI), uploads to uguu.se, POSTs to
     OpenAI-compatible /chat/completions endpoint. Requires ``api_key`` in params.
+
+    Empirical notes (live-tested 2026-08-26, from the retired adapter):
+    - catbox.moe blocks this host class with 412 "Invalid uploader" (IP-wide,
+      curl too); uguu.se verified working. Both response formats supported
+      (JSON ``files[].url`` and plain-text body).
+    - Prompt "OCR this image." beats "Convert the document to markdown.":
+      the markdown prompt triggers repetition loops (p27 → 447x "ПОВТОРА №"
+      lines; the terse prompt gave clean output on the title page).
     """
     api_key = params.get("api_key")
     base_url = params.get("base_url", "https://api.novita.ai/openai")

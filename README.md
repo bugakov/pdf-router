@@ -156,7 +156,7 @@ src/pdf_router/
   cli.py                # argparse entry point
   adapters/
     pdf_inspector.py    # always-loaded (text path + structural blocks)
-    pdf_inspector_ocr.py, tesseract.py, glm_ocr.py, deepseek_ocr.py
+  ocr.py                # flat OCR engines: rapidocr/pdf_inspector_ocr/tesseract/glm/deepseek
   renderers/
     md.py, chunks.py, json_renderer.py
 tests/

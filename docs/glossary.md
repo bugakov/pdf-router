@@ -5,12 +5,13 @@ points to the code that defines it.
 
 ## Adapter
 
-A module that converts one upstream library's output into the IR. The
-always-loaded adapter is `AdapterPdfInspector`
-(`src/pdf_router/adapters/pdf_inspector.py:298`). OCR adapters (tesseract,
-glm-ocr, deepseek-ocr, pdf_inspector_ocr) are loaded **only** when the
-corresponding `[ocr.*]` section is present in `router.toml`. An adapter
-that is not configured is not even imported (`src/pdf_router/core.py:84-93`).
+A module that converts one upstream library's output into the IR. The only
+remaining adapter is the pdf-inspector text path
+(`src/pdf_router/adapters/pdf_inspector.py`, `extract_ir()`), always loaded.
+OCR engines are **flat functions** in `src/pdf_router/ocr.py` (rapidocr,
+pdf_inspector_ocr, tesseract, glm_ocr, deepseek_ocr) dispatched by
+`ocr_page()`; the retired `Adapter*` classes were deleted per TKT-RT-14
+(their empirical notes live in the flat functions' docstrings).
 
 ## BBox
 

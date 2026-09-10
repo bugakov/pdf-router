@@ -63,39 +63,28 @@ def test_p27_with_tesseract(p27_pdf) -> None:
 # --- Ticket 05: pdf-inspector native OCR -------------------------------------
 
 
-def test_pdf_inspector_ocr_available_with_runtime_paths() -> None:
-    from pdf_router.adapters.pdf_inspector_ocr import AdapterPdfInspectorOCR
+def _runtime_ocr_params() -> dict[str, str]:
+    """Paths to the .runtime binaries; empty dict when they are absent."""
+    params = {
+        "pdfium_lib_path": str(RUNTIME / "lib" / "libpdfium.so"),
+        "ort_dylib_path": str(
+            RUNTIME / "onnxruntime-linux-x64-1.27.0" / "lib" / "libonnxruntime.so"
+        ),
+    }
+    from pathlib import Path
 
-    adapter = AdapterPdfInspectorOCR(
-        {
-            "pdfium_lib_path": str(RUNTIME / "lib" / "libpdfium.so"),
-            "ort_dylib_path": str(RUNTIME / "onnxruntime-linux-x64-1.27.0" / "lib" / "libonnxruntime.so"),
-        }
-    )
-    assert adapter.available() is True
-
-
-def test_pdf_inspector_ocr_unavailable_with_bogus_paths() -> None:
-    from pdf_router.adapters.pdf_inspector_ocr import AdapterPdfInspectorOCR
-
-    adapter = AdapterPdfInspectorOCR(
-        {"pdfium_lib_path": "/nonexistent/libpdfium.so", "ort_dylib_path": "/nonexistent/libonnxruntime.so"}
-    )
-    assert adapter.available() is False
+    if not all(Path(v).is_file() for v in params.values()):
+        return {}
+    return params
 
 
 @pytest.mark.slow
 def test_p27_with_pdf_inspector_ocr(p27_pdf) -> None:
     """Full OCR run (~20s/page): src_tool flips to PDF_INSPECTOR_OCR."""
-    from pdf_router.adapters.pdf_inspector_ocr import AdapterPdfInspectorOCR
     from pdf_router.config import RoutingConfig
 
-    params = {
-        "pdfium_lib_path": str(RUNTIME / "lib" / "libpdfium.so"),
-        "ort_dylib_path": str(RUNTIME / "onnxruntime-linux-x64-1.27.0" / "lib" / "libonnxruntime.so"),
-    }
-    adapter = AdapterPdfInspectorOCR(params)
-    if not adapter.available():
+    params = _runtime_ocr_params()
+    if not params:
         pytest.skip(".runtime binaries not present")
 
     config = RouterConfig()
@@ -115,13 +104,3 @@ def test_p27_with_pdf_inspector_ocr(p27_pdf) -> None:
     assert page.error is None
     assert page.markdown.strip()
     assert report.pages_ocr == 1
-
-
-# --- Ticket 06: tesseract -----------------------------------------------------
-
-
-def test_tesseract_available() -> None:
-    from pdf_router.adapters.tesseract import AdapterTesseract
-
-    adapter = AdapterTesseract({"languages": ["rus", "eng"]})
-    assert adapter.available() is True  # tesseract 5.3.4 on PATH in sandbox

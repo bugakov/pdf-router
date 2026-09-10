@@ -21,8 +21,10 @@ Structural blocks (IR 0.2):
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections import Counter
+from pathlib import Path
 from typing import Any, Iterable
 
 from pdf_router.ir import (
@@ -198,8 +200,11 @@ def _headings_from_structure_tree(
 # ---------------------------------------------------------------------------
 
 
-def extract_ir(path: str) -> IR:
+def extract_ir(path: str | Path) -> IR:
     """Extract full IR from a PDF via pdf-inspector.
+
+    ``path`` accepts str or Path (coerced here — the Rust pyo3 boundary
+    requires str and raises an opaque TypeError otherwise).
 
     Two Rust calls:
     - ``process_pdf(path)`` — document-level metadata.
@@ -213,6 +218,7 @@ def extract_ir(path: str) -> IR:
     """
     import pdf_inspector
 
+    path = os.fspath(path)
     result = pdf_inspector.process_pdf(path)
     pages_result = pdf_inspector.extract_pages_markdown(path)
 

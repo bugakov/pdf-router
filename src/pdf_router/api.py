@@ -30,6 +30,8 @@ Two rules this module exists to enforce:
 
 from __future__ import annotations
 
+import logging
+import os
 from pathlib import Path
 
 from pdf_router.config import (
@@ -48,6 +50,8 @@ from pdf_router.ir import (
     to_dict,
 )
 
+logger = logging.getLogger("pdf_router")
+
 __all__ = [
     "ConfigError",
     "ProcessingError",
@@ -58,6 +62,7 @@ __all__ = [
     "render_chunks",
     "render_json",
     "render_markdown",
+    "wire_pdf_inspector_env",
     "write_outputs",
     # Re-exported types, so a caller never imports a submodule.
     "IR",
@@ -123,6 +128,48 @@ def _coerce_renderer_config(config: RendererConfig | RouterConfig | None) -> Ren
     raise ConfigError(
         f"renderer config must be RendererConfig or RouterConfig; got {type(config).__name__}"
     )
+
+
+def wire_pdf_inspector_env(config: RouterConfig) -> None:
+    """Bridge ``[ocr.pdf_inspector_ocr]`` paths into the process environment.
+
+    pdf-inspector's Rust core reads ``PDFIUM_LIB_PATH`` and
+    ``ORT_DYLIB_PATH`` from the environment — no function kwargs exist for
+    them. This function is the only sanctioned bridge; the library itself
+    never writes ``os.environ`` (an app's process must not be mutated
+    behind its back).
+
+    Behaviour:
+    - No-op unless ``routing.ocr_fallback_engine == "pdf_inspector_ocr"``.
+    - Sets each var from the TOML section. If the env already holds a
+      *different* value, it is overridden with a warning (the TOML section
+      is the single source of truth).
+    - The CLI calls this automatically before processing; a library caller
+      invokes it once before :func:`process_pdf`.
+    """
+    if config.routing.ocr_fallback_engine != "pdf_inspector_ocr":
+        return
+    params = config.ocr_engines.get("pdf_inspector_ocr", {})
+    for env_name, key in (
+        ("PDFIUM_LIB_PATH", "pdfium_lib_path"),
+        ("ORT_DYLIB_PATH", "ort_dylib_path"),
+    ):
+        value = params.get(key)
+        if not value:
+            continue  # required-keys validation guarantees presence at load
+        value = str(value)
+        current = os.environ.get(env_name)
+        if current == value:
+            continue
+        if current is not None:
+            logger.warning(
+                "overriding %s=%r with [ocr.pdf_inspector_ocr] %s=%r",
+                env_name,
+                current,
+                key,
+                value,
+            )
+        os.environ[env_name] = value
 
 
 def load_config(path: str | Path | None = None) -> RouterConfig:

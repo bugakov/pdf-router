@@ -63,6 +63,14 @@ Config is optional everywhere: `None` (built-in defaults), a TOML path, or a
 defaults for inspection/override). A missing explicit config path raises
 `ConfigError` — typos never silently change routing.
 
+One exception to "no side effects": if you select the `pdf_inspector_ocr`
+engine, its Rust core reads two env vars (`PDFIUM_LIB_PATH`,
+`ORT_DYLIB_PATH`) and there is no kwarg alternative. The library itself
+never writes `os.environ` — call `pdf_router.wire_pdf_inspector_env(config)`
+once after loading the config (the CLI does this for you). It bridges the
+`[ocr.pdf_inspector_ocr]` TOML section into the env, warns on stale
+mismatches, and is a no-op for every other engine.
+
 ## Configuration
 
 Copy `router.toml.example` to `router.toml`. `[ocr.<engine>]` sections store

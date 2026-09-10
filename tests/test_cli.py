@@ -61,15 +61,26 @@ def test_exit_2_when_page_fails(p27_pdf, tmp_path, monkeypatch, capsys) -> None:
     --config (the new default is rapidocr, which would succeed and exit 0).
     Partial success → exit 2, failed page listed on stderr."""
     import textwrap
+    # Paths must exist on disk (load-time validation): the engine is
+    # configured, but its binaries are dummies, so the OCR call fails at
+    # runtime (dlopen of a non-library file) → partial success.
+    pdfium = tmp_path / "libpdfium.so"
+    ort = tmp_path / "libonnxruntime.so"
+    pdfium.write_bytes(b"dummy")
+    ort.write_bytes(b"dummy")
     cfg = tmp_path / "test.toml"
-    cfg.write_text(textwrap.dedent("""\
+    cfg.write_text(textwrap.dedent(f"""\
         [routing]
         ocr_fallback_engine = "pdf_inspector_ocr"
 
         [ocr.pdf_inspector_ocr]
-        pdfium_lib_path = "/nonexistent/libpdfium.so"
-        ort_dylib_path = "/nonexistent/libonnxruntime.so"
+        pdfium_lib_path = "{pdfium}"
+        ort_dylib_path = "{ort}"
     """))
+    # cli.main wires these env vars from the TOML; register the undo first
+    # so the leak does not outlive the test.
+    monkeypatch.delenv("PDFIUM_LIB_PATH", raising=False)
+    monkeypatch.delenv("ORT_DYLIB_PATH", raising=False)
     monkeypatch.chdir(tmp_path)
     out_dir = tmp_path / "out27"
     code = cli.main(["--config", str(cfg), "--out", str(out_dir), str(p27_pdf)])

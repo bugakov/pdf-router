@@ -18,6 +18,8 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+import logging
+import os
 
 import pytest
 
@@ -53,7 +55,88 @@ HEAVY_MODULES = (
 
 
 # ---------------------------------------------------------------------------
-# Import-cost contract
+# --- wire_pdf_inspector_env -------------------------------------------------
+
+
+def test_wire_noop_for_other_engines(tmp_path) -> None:
+    """Default config (rapidocr) → wire does nothing, env untouched."""
+    before = dict(os.environ)
+    pdf_router.wire_pdf_inspector_env(RouterConfig())
+    assert dict(os.environ) == before
+
+
+def test_wire_sets_env_from_section(tmp_path) -> None:
+    """Selected pdf_inspector_ocr → both paths land in env."""
+    pdfium = tmp_path / "libpdfium.so"
+    ort = tmp_path / "libonnxruntime.so"
+    pdfium.write_bytes(b"x")
+    ort.write_bytes(b"x")
+    cfg = RouterConfig()
+    cfg.routing.ocr_fallback_engine = "pdf_inspector_ocr"
+    cfg.ocr_engines["pdf_inspector_ocr"] = {
+        "pdfium_lib_path": str(pdfium),
+        "ort_dylib_path": str(ort),
+    }
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.delenv("PDFIUM_LIB_PATH", raising=False)
+        monkeypatch.delenv("ORT_DYLIB_PATH", raising=False)
+        pdf_router.wire_pdf_inspector_env(cfg)
+        assert os.environ["PDFIUM_LIB_PATH"] == str(pdfium)
+        assert os.environ["ORT_DYLIB_PATH"] == str(ort)
+    finally:
+        monkeypatch.undo()
+
+
+def test_wire_overrides_mismatched_env_with_warning(tmp_path, caplog) -> None:
+    """Stale env pointing elsewhere → overwritten + warning (config wins)."""
+    pdfium = tmp_path / "libpdfium.so"
+    ort = tmp_path / "libonnxruntime.so"
+    pdfium.write_bytes(b"x")
+    ort.write_bytes(b"x")
+    cfg = RouterConfig()
+    cfg.routing.ocr_fallback_engine = "pdf_inspector_ocr"
+    cfg.ocr_engines["pdf_inspector_ocr"] = {
+        "pdfium_lib_path": str(pdfium),
+        "ort_dylib_path": str(ort),
+    }
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setenv("PDFIUM_LIB_PATH", "/stale/libpdfium.so")
+        monkeypatch.setenv("ORT_DYLIB_PATH", "/stale/libonnxruntime.so")
+        with caplog.at_level(logging.WARNING, logger="pdf_router"):
+            pdf_router.wire_pdf_inspector_env(cfg)
+        assert os.environ["PDFIUM_LIB_PATH"] == str(pdfium)
+        assert os.environ["ORT_DYLIB_PATH"] == str(ort)
+        assert any("overriding" in rec.message for rec in caplog.records)
+    finally:
+        monkeypatch.undo()
+
+
+def test_wire_keeps_equal_env_silently(tmp_path, caplog) -> None:
+    """Env already matching the config → no warning, no rewrite."""
+    pdfium = tmp_path / "libpdfium.so"
+    ort = tmp_path / "libonnxruntime.so"
+    pdfium.write_bytes(b"x")
+    ort.write_bytes(b"x")
+    cfg = RouterConfig()
+    cfg.routing.ocr_fallback_engine = "pdf_inspector_ocr"
+    cfg.ocr_engines["pdf_inspector_ocr"] = {
+        "pdfium_lib_path": str(pdfium),
+        "ort_dylib_path": str(ort),
+    }
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setenv("PDFIUM_LIB_PATH", str(pdfium))
+        monkeypatch.setenv("ORT_DYLIB_PATH", str(ort))
+        with caplog.at_level(logging.WARNING, logger="pdf_router"):
+            pdf_router.wire_pdf_inspector_env(cfg)
+        assert not any("overriding" in rec.message for rec in caplog.records)
+    finally:
+        monkeypatch.undo()
+
+
+# --- load_config / defaults -------------------------------------------------
 # ---------------------------------------------------------------------------
 
 

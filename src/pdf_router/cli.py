@@ -17,7 +17,7 @@ from pathlib import Path
 
 from pdf_router import __version__
 from pdf_router.config import ConfigError, RouterConfig
-from pdf_router.api import write_outputs
+from pdf_router.api import wire_pdf_inspector_env, write_outputs
 
 logger = logging.getLogger("pdf_router")
 
@@ -121,6 +121,11 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0
+
+    # pdf-inspector's Rust core is env-wired (PDFIUM_LIB_PATH/ORT_DYLIB_PATH);
+    # the CLI bridges the TOML paths into the process env here. The library
+    # itself never writes os.environ.
+    wire_pdf_inspector_env(cfg)
 
     from pdf_router.core import process_pdf
 

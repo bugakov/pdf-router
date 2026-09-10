@@ -124,6 +124,47 @@ ocr_fallback_engine = "glm_ocr"
         RouterConfig.from_toml(toml)
 
 
+def test_pdf_inspector_paths_missing_section_raises(tmp_path):
+    """pdf_inspector_ocr section without the two library paths → ConfigError."""
+    cfg_file = tmp_path / "cfg.toml"
+    cfg_file.write_text(
+        '[routing]\nocr_fallback_engine = "pdf_inspector_ocr"\n\n'
+        '[ocr.pdf_inspector_ocr]\ndpi = 200.0\n'
+    )
+    with pytest.raises(ConfigError, match="pdfium_lib_path.*ort_dylib_path"):
+        RouterConfig.from_toml(cfg_file)
+
+
+def test_pdf_inspector_paths_not_on_disk_raises(tmp_path):
+    """Paths pointing at nonexistent files → ConfigError at load (fail fast)."""
+    cfg_file = tmp_path / "cfg.toml"
+    cfg_file.write_text(
+        '[routing]\nocr_fallback_engine = "pdf_inspector_ocr"\n\n'
+        "[ocr.pdf_inspector_ocr]\n"
+        'pdfium_lib_path = "/nonexistent/libpdfium.so"\n'
+        'ort_dylib_path = "/nonexistent/libonnxruntime.so"\n'
+    )
+    with pytest.raises(ConfigError, match="pdfium_lib_path not found"):
+        RouterConfig.from_toml(cfg_file)
+
+
+def test_pdf_inspector_paths_ok_when_files_exist(tmp_path):
+    """Dummy files on disk pass load validation (runtime may still fail)."""
+    pdfium = tmp_path / "libpdfium.so"
+    ort = tmp_path / "libonnxruntime.so"
+    pdfium.write_bytes(b"x")
+    ort.write_bytes(b"x")
+    cfg_file = tmp_path / "cfg.toml"
+    cfg_file.write_text(
+        '[routing]\nocr_fallback_engine = "pdf_inspector_ocr"\n\n'
+        f"[ocr.pdf_inspector_ocr]\n"
+        f'pdfium_lib_path = "{pdfium}"\n'
+        f'ort_dylib_path = "{ort}"\n'
+    )
+    cfg = RouterConfig.from_toml(cfg_file)
+    assert cfg.ocr_engines["pdf_inspector_ocr"]["pdfium_lib_path"] == str(pdfium)
+
+
 def test_rapidocr_selected_without_section_loads(tmp_path) -> None:
     """rapidocr needs no [ocr.*] section — built-in defaults are enough."""
     toml = tmp_path / "router.toml"

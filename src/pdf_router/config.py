@@ -5,6 +5,11 @@ env-var lookup for keys. OCR model: ``[ocr.<engine>]`` sections STORE engine
 params; exactly ONE engine runs, picked by ``[routing].ocr_fallback_engine``.
 Sections of unselected engines are validated but otherwise ignored. Unknown
 sections/keys log a WARNING and are ignored (forward-compat).
+
+The library never writes ``os.environ``. pdf-inspector's Rust core reads its
+two library paths (``PDFIUM_LIB_PATH``/``ORT_DYLIB_PATH``) from the process
+env; ``pdf_router.wire_pdf_inspector_env()`` is the sanctioned bridge from
+the ``[ocr.pdf_inspector_ocr]`` section (the CLI calls it automatically).
 """
 
 from __future__ import annotations
@@ -168,6 +173,14 @@ def _validate_ocr_selection(
             f"[routing] ocr_fallback_engine = {engine!r} but no [ocr.{engine}] "
             f"section; add one (required key(s): {required})"
         )
+    if engine == "pdf_inspector_ocr":
+        # pdf-inspector's Rust core dlopens these two files; a typo'd path
+        # would otherwise surface as OcrError on the first OCR page. Unselected
+        # sections are not path-checked (they are stored, not used).
+        for key in ("pdfium_lib_path", "ort_dylib_path"):
+            p = Path(str(engines[engine][key]))
+            if not p.is_file():
+                raise ConfigError(f"[ocr.pdf_inspector_ocr] {key} not found: {p}")
 
 
 def _warn_unknown(present: Any, known: set[str], where: str) -> None:

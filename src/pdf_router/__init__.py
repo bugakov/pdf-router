@@ -33,6 +33,7 @@ from pdf_router.api import (
     render_json,
     render_markdown,
     to_dict,
+    wire_pdf_inspector_env,
     write_outputs,
 )
 
@@ -47,6 +48,7 @@ __all__ = [
     "render_chunks",
     "render_json",
     "render_markdown",
+    "wire_pdf_inspector_env",
     "write_outputs",
     # Errors
     "ConfigError",

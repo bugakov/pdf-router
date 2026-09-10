@@ -145,6 +145,16 @@ def _rapidocr_get_engine(config: RouterConfig):
         if cached is not None:
             return cached
 
+        # numpy must be imported before rapidocr. onnxruntime initializes
+        # its thread pool at session build; importing numpy first pins a
+        # deterministic native-init order — cheap insurance against an
+        # intermittent 0%-CPU futex hang observed on this 2-CPU box in
+        # fresh processes during early OCR (every observed occurrence had
+        # another OCR process alive concurrently; 18/18 probe samples OK
+        # on a free machine, so the trigger is not fully understood).
+        # No env mutation involved — import order only.
+        import numpy  # noqa: F401  (imported for native init order)
+
         from rapidocr import RapidOCR
 
         engine = RapidOCR(params=params)
@@ -224,9 +234,14 @@ def _ocr_pdf_inspector(pdf_path: str, page_idx: int, params: dict[str, Any]) -> 
     refactor. PDFium calls are cheap (~10ms) so per-page overhead is
     acceptable. A batched variant is a v0.5+ optimization if needed.
 
-    Requires ``pdfium_lib_path`` and ``ort_dylib_path`` in params. These are
-    the PDFium shared library and the ONNX Runtime dylib that pdf-inspector
-    needs to actually run its PP-OCRv6 model.
+    Environment contract (the library never writes ``os.environ``): the
+    pdf-inspector Rust core reads ``PDFIUM_LIB_PATH`` and ``ORT_DYLIB_PATH``
+    from the process env — no function kwargs exist for them. They are
+    bridged from the ``[ocr.pdf_inspector_ocr]`` section by
+    ``pdf_router.wire_pdf_inspector_env()`` (the CLI calls it
+    automatically; library callers invoke it once before ``process_pdf``).
+    A missing env is a hard error with that instruction — no silent
+    fallback, no env writes from here.
 
     Tuning knobs (all optional, safe defaults):
     - ``dpi`` (default 150.0): raster resolution for the render step.
@@ -237,32 +252,26 @@ def _ocr_pdf_inspector(pdf_path: str, page_idx: int, params: dict[str, Any]) -> 
     - ``offline`` (default True): skip hosted-OCR recommendation checks
       and block model downloads. Set False only if you accept the network
       round-trip to fetch a missing pinned model artifact on first use.
-    - ``model_cache_dir``: override the local model cache directory
+    - ``model_cache_dir``: passed to pdf-inspector as ``model_directory``
       (default ``~/.cache/pdf-inspector/models``).
     """
     import os
 
-    pdfium_lib = params.get("pdfium_lib_path")
-    ort_dylib = params.get("ort_dylib_path")
+    pdfium_lib = os.environ.get("PDFIUM_LIB_PATH")
+    ort_dylib = os.environ.get("ORT_DYLIB_PATH")
+    if not (pdfium_lib and ort_dylib):
+        raise OcrError(
+            "pdf_inspector_ocr env not wired: export PDFIUM_LIB_PATH and "
+            "ORT_DYLIB_PATH, or call pdf_router.wire_pdf_inspector_env(config) "
+            "(the CLI does this automatically)"
+        )
+    if not (Path(pdfium_lib).is_file() and Path(ort_dylib).is_file()):
+        raise OcrError(f"pdf_inspector_ocr binaries not found: {pdfium_lib}, {ort_dylib}")
+
     model_cache = params.get("model_cache_dir")
     dpi = float(params.get("dpi", 150.0))
     minimum_confidence = float(params.get("minimum_confidence", 0.0))
     offline = bool(params.get("offline", True))
-
-    if not (pdfium_lib and ort_dylib):
-        raise OcrError("pdf_inspector_ocr requires pdfium_lib_path and ort_dylib_path")
-    if not (Path(pdfium_lib).is_file() and Path(ort_dylib).is_file()):
-        raise OcrError(f"pdf_inspector_ocr binaries not found: {pdfium_lib}, {ort_dylib}")
-
-    # Wire env for the Rust core.
-    os.environ["PDFIUM_LIB_PATH"] = str(pdfium_lib)
-    os.environ["ORT_DYLIB_PATH"] = str(ort_dylib)
-    ort_dir = str(Path(ort_dylib).parent)
-    ld = os.environ.get("LD_LIBRARY_PATH", "")
-    if ort_dir not in ld.split(":"):
-        os.environ["LD_LIBRARY_PATH"] = f"{ort_dir}:{ld}" if ld else ort_dir
-    if model_cache:
-        os.environ.setdefault("PDF_INSPECTOR_MODEL_CACHE", str(model_cache))
 
     import pdf_inspector
 
@@ -273,6 +282,7 @@ def _ocr_pdf_inspector(pdf_path: str, page_idx: int, params: dict[str, Any]) -> 
         dpi=dpi,
         minimum_confidence=minimum_confidence,
         offline=offline,
+        model_directory=model_cache or None,
     )
     for pg in result.pages:
         if pg.page_number == page_idx + 1:
@@ -281,6 +291,8 @@ def _ocr_pdf_inspector(pdf_path: str, page_idx: int, params: dict[str, Any]) -> 
                 raise OcrError(f"page {page_idx + 1}: empty pdf_inspector_ocr result")
             return md
     raise OcrError(f"page {page_idx + 1} missing from pdf_inspector_ocr result")
+
+
 def _ocr_tesseract(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
     """OCR via tesseract CLI subprocess.
 

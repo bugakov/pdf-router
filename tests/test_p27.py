@@ -7,18 +7,13 @@ v0.3 changes:
 - report is returned directly, not via router.last_report.
 """
 
-from pathlib import Path
-
 import pytest
 
 from pdf_router.config import RouterConfig
 from pdf_router.core import process_pdf
 from pdf_router.ir import SrcTool
 
-RUNTIME = Path("/home/scanum/pdf-router/.runtime")
 
-
-@pytest.mark.slow
 @pytest.mark.slow
 def test_p27_default_config_uses_rapidocr(p27_pdf) -> None:
     """Default config: rapidocr is the fallback engine. It should succeed on p27
@@ -63,42 +58,30 @@ def test_p27_with_tesseract(p27_pdf) -> None:
 # --- Ticket 05: pdf-inspector native OCR -------------------------------------
 
 
-def _runtime_ocr_params() -> dict[str, str]:
-    """Paths to the .runtime binaries; empty dict when they are absent."""
-    params = {
-        "pdfium_lib_path": str(RUNTIME / "lib" / "libpdfium.so"),
-        "ort_dylib_path": str(
-            RUNTIME / "onnxruntime-linux-x64-1.27.0" / "lib" / "libonnxruntime.so"
-        ),
-    }
-    from pathlib import Path
-
-    if not all(Path(v).is_file() for v in params.values()):
-        return {}
-    return params
-
-
 @pytest.mark.slow
-def test_p27_with_pdf_inspector_ocr(p27_pdf) -> None:
-    """Full OCR run (~20s/page): src_tool flips to PDF_INSPECTOR_OCR."""
-    from pdf_router.config import RoutingConfig
+def test_p27_with_pdf_inspector_ocr(p27_pdf, monkeypatch) -> None:
+    """p27 via the text path + pdf_inspector_ocr OCR fallback (real binaries).
 
-    params = _runtime_ocr_params()
-    if not params:
-        pytest.skip(".runtime binaries not present")
+    Requires the .runtime binaries; wire_pdf_inspector_env bridges the
+    config section to the env the Rust core reads.
+    """
+    from pdf_router import wire_pdf_inspector_env
 
     config = RouterConfig()
-    config.routing = RoutingConfig(
-        ocr_fallback_engine="pdf_inspector_ocr",
-        language=None,
-        text_alpha_threshold=0.3,
-        workers=1,
-        extract_raster_photos=False,
-        extract_vector_diagrams=False,
-    )
-    config.ocr_engines["pdf_inspector_ocr"] = params
-    ir, report = process_pdf(str(p27_pdf), config)
-
+    config.routing.ocr_fallback_engine = "pdf_inspector_ocr"
+    config.ocr_engines["pdf_inspector_ocr"] = {
+        "pdfium_lib_path": "/home/scanum/pdf-router/.runtime/lib/libpdfium.so",
+        "ort_dylib_path": (
+            "/home/scanum/pdf-router/.runtime/onnxruntime-linux-x64-1.27.0/"
+            "lib/libonnxruntime.so"
+        ),
+    }
+    # wire sets these; register undo first so the leak does not outlive the test.
+    monkeypatch.delenv("PDFIUM_LIB_PATH", raising=False)
+    monkeypatch.delenv("ORT_DYLIB_PATH", raising=False)
+    wire_pdf_inspector_env(config)
+    ir, report = process_pdf(p27_pdf, config=config)
+    assert report.pages_total == 1
     page = ir.pages[0]
     assert page.src_tool is SrcTool.PDF_INSPECTOR_OCR
     assert page.error is None

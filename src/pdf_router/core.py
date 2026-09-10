@@ -18,9 +18,11 @@ Key decisions:
 from __future__ import annotations
 
 import logging
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 
 from pdf_router.config import RouterConfig
 from pdf_router.ir import IR, SrcTool
@@ -45,10 +47,15 @@ def _engine_to_src_tool(engine: str) -> SrcTool:
     return SrcTool(engine)
 
 
-def process_pdf(pdf_path: str, config: RouterConfig) -> tuple[IR, ProcessingReport]:
-    """Full routing pipeline. Returns (IR, ProcessingReport)."""
+def process_pdf(pdf_path: str | Path, config: RouterConfig) -> tuple[IR, ProcessingReport]:
+    """Full routing pipeline. Returns (IR, ProcessingReport).
+
+    ``pdf_path`` accepts str or Path — coerced here so every downstream
+    call (Rust pyo3 boundary, subprocess args) receives a plain str.
+    """
     from pdf_router.adapters.pdf_inspector import extract_ir
 
+    pdf_path = os.fspath(pdf_path)
     t0 = time.perf_counter()
     doc = extract_ir(pdf_path)
     report = ProcessingReport(pages_total=len(doc.pages))

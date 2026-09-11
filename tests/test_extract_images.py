@@ -8,7 +8,6 @@ Covers:
 
 from __future__ import annotations
 
-import json
 import subprocess
 import tempfile
 from pathlib import Path
@@ -61,13 +60,15 @@ def test_page_images_dir_layout() -> None:
 # --- bg filter ----------------------------------------------------------------
 
 
-def test_extract_raster_photos_writes_sidecar(monkeypatch) -> None:
+def test_extract_page_images_raster_writes_sidecar(monkeypatch) -> None:
     """Smoke: extraction produces files under <output_dir>/<doc-id>/images/."""
-    from pdf_router.extract_images import extract_raster_photos
+    from pdf_router.extract_images import extract_page_images
 
     with tempfile.TemporaryDirectory() as tmp:
         out_dir = Path(tmp)
-        saved = extract_raster_photos(PageResult(page=0), str(PZU), out_dir)
+        saved = extract_page_images(
+            PageResult(page=0), str(PZU), out_dir, raster=True, vector=False
+        )
         assert saved, "expected at least one image on pzu page 1"
         for rel in saved:
             fpath = out_dir / rel
@@ -78,6 +79,46 @@ def test_extract_raster_photos_writes_sidecar(monkeypatch) -> None:
             assert parts[1] == "images"
             assert parts[2].startswith("page0001_photo_")
             assert parts[2].endswith(".png") or parts[2].endswith(".jpeg")
+
+
+def test_extract_page_images_no_flags_noop() -> None:
+    """Both flags off: no open, no dirs, no files — plain []."""
+    from pdf_router.extract_images import extract_page_images
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out_dir = Path(tmp)
+        saved = extract_page_images(
+            PageResult(page=0), str(PZU), out_dir, raster=False, vector=False
+        )
+        assert saved == []
+        assert list(out_dir.iterdir()) == [], "no-op must not create sidecar dirs"
+
+
+def test_extract_page_images_opens_pdf_once(monkeypatch) -> None:
+    """REGRESSION: one PDF open per page regardless of enabled passes.
+
+    Previously raster opened the doc once and vector twice (drawings pass +
+    pixmap re-open) — 3 opens/page, ~100 ms each on large engineering PDFs.
+    """
+    import pymupdf
+
+    from pdf_router.extract_images import extract_page_images
+
+    real_open = pymupdf.open
+    open_count = {"n": 0}
+
+    def counting_open(*args, **kwargs):
+        open_count["n"] += 1
+        return real_open(*args, **kwargs)
+
+    monkeypatch.setattr(pymupdf, "open", counting_open)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        saved = extract_page_images(
+            PageResult(page=0), str(PZU), Path(tmp), raster=True, vector=True
+        )
+    assert open_count["n"] == 1, f"expected 1 open, got {open_count['n']}"
+    assert isinstance(saved, list)
 
 
 def test_extract_vector_diagrams_threshold() -> None:

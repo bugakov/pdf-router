@@ -28,7 +28,7 @@ from pdf_router.config import RouterConfig
 from pdf_router.ir import IR, SrcTool
 from pdf_router.quality import looks_like_text
 from pdf_router.ocr import ocr_page, OcrError
-from pdf_router.extract_images import extract_raster_photos, extract_vector_diagrams
+from pdf_router.extract_images import extract_page_images
 
 logger = logging.getLogger("pdf_router")
 
@@ -70,11 +70,12 @@ def process_pdf(pdf_path: str | Path, config: RouterConfig) -> tuple[IR, Process
         futures = []  # list of (page, img_fut, txt_fut)
         for page in doc.pages:
             img_fut = pool.submit(
-                _extract_images_for_page,
+                extract_page_images,
                 page,
                 pdf_path,
                 output_dir,
-                routing_cfg,
+                raster=routing_cfg.extract_raster_photos,
+                vector=routing_cfg.extract_vector_diagrams,
             )
             txt_fut = pool.submit(
                 _process_text_for_page,
@@ -180,20 +181,4 @@ def _process_text_for_page(page, pdf_path: str, config: RouterConfig) -> None:
         logger.warning("page %d: %s", page.page + 1, exc)
 
 
-# ---------------------------------------------------------------------------
-# Image extraction
-# ---------------------------------------------------------------------------
 
-
-def _extract_images_for_page(page, pdf_path: str, output_dir, routing_cfg) -> list[str]:
-    """Extract raster + vector images from one page.
-
-    Returns a list of relative paths from ``output_dir``.
-    Runs before text processing; does not mutate the page.
-    """
-    saved = []
-    if routing_cfg.extract_raster_photos:
-        saved.extend(extract_raster_photos(page, pdf_path, output_dir))
-    if routing_cfg.extract_vector_diagrams:
-        saved.extend(extract_vector_diagrams(page, pdf_path, output_dir))
-    return saved

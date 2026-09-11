@@ -1,8 +1,12 @@
 """Image extraction from PDF pages.
 
-Two flat functions — no classify_page, no class hierarchy:
-- ``extract_raster_photos``: Image XObjects, filters page-background (area >= 80%).
-- ``extract_vector_diagrams``: vector paths rendered to PNG.
+One entry point — ``extract_page_images`` — no class hierarchy:
+- raster pass: Image XObjects, filters page-background (area >= 80%).
+- vector pass: vector paths rendered to PNG.
+
+The PDF is opened once per page regardless of how many passes run
+(previously up to 3 opens: 1 raster + 2 vector — measurable on large
+engineering PDFs, where a single open costs ~100 ms per 20 MB).
 
 Image paths follow the sidecar schema from TKT-RT-12:
   <output_dir>/<doc-id>/images/page{N:04d}_{kind}_{idx:02d}.png
@@ -13,10 +17,16 @@ Paths stored in PageResult.images are relative to output_dir.
 from __future__ import annotations
 
 import hashlib
-import shutil
+import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pdf_router.ir import PageResult
+
+if TYPE_CHECKING:
+    import pymupdf
+
+logger = logging.getLogger("pdf_router")
 
 
 # Minimum bounding-rect area (pt²) for a vector diagram to be saved.
@@ -38,72 +48,102 @@ def page_images_dir(output_dir: Path, doc_id: str) -> Path:
     return d
 
 
-# ---------------------------------------------------------------------------
-# Raster photos
-# ---------------------------------------------------------------------------
-
-
-def extract_raster_photos(
+def extract_page_images(
     page: PageResult,
     pdf_path: str,
     output_dir: Path,
+    *,
+    raster: bool,
+    vector: bool,
 ) -> list[str]:
-    """Extract embedded raster images (JPEG, PNG, etc.) from one page.
+    """Extract raster photos and/or vector diagrams from one page.
 
-    Returns a list of relative paths from ``output_dir`` (e.g.
-    ``abcdef123456/images/page0001_photo_00.png``). Returns ``[]`` if
-    the page has no images, or if the only image covers >= 80% of the
-    page area (page-background scan — not useful for RAG).
-
-    The raster is decoded via PyMuPDF's ``Page.extract_image(xref)``.
+    Opens the PDF once and runs the requested passes against that single
+    handle. Returns a list of relative paths from ``output_dir`` (e.g.
+    ``abcdef123456/images/page0001_photo_00.png``); ``[]`` when both flags
+    are off or the page yields nothing.
     """
+    if not raster and not vector:
+        return []
+
     import pymupdf
 
     did = doc_id_from_path(pdf_path)
     img_dir = page_images_dir(output_dir, did)
 
+    saved: list[str] = []
     doc = pymupdf.open(pdf_path)
     try:
         pymupdf_page = doc[page.page]
         if pymupdf_page is None:
             return []
-        raw_images = pymupdf_page.get_images(full=True)
-        if not raw_images:
-            return []
-
-        page_area = pymupdf_page.rect.width * pymupdf_page.rect.height
-
-        saved: list[str] = []
-        photo_count = 0
-
-        for xref, *rest in raw_images:
-            # rest: width, height, bpc, colorspace, xref_name, smask, fname, compress
-            img_width = rest[0]
-            img_height = rest[1]
-
-            # Filter: page-background scan (>= 80% page area).
-            if img_width * img_height >= 0.80 * page_area:
-                continue
-
-            try:
-                pix = doc.extract_image(xref)
-            except Exception:
-                continue
-
-            if not pix:
-                continue
-
-            ext = pix.get("ext", "png")
-            ext = "png" if ext.lower() in {"jpeg", "jpg", "jpx", "jp2"} else ext
-            fname = f"page{page.page + 1:04d}_photo_{photo_count:02d}.{ext}"
-            fpath = img_dir / fname
-            fpath.write_bytes(pix["image"])  # pix["image"] is bytes
-
-            # Store relative path from output_dir.
-            saved.append(str(fpath.relative_to(output_dir)))
-            photo_count += 1
+        if raster:
+            saved.extend(
+                _extract_raster_photos(doc, pymupdf_page, page, output_dir, img_dir)
+            )
+        if vector:
+            saved.extend(
+                _extract_vector_diagrams(pymupdf_page, page, output_dir, img_dir)
+            )
     finally:
         doc.close()
+
+    return saved
+
+
+# ---------------------------------------------------------------------------
+# Raster photos
+# ---------------------------------------------------------------------------
+
+
+def _extract_raster_photos(
+    doc: pymupdf.Document,
+    pymupdf_page: pymupdf.Page,
+    page: PageResult,
+    output_dir: Path,
+    img_dir: Path,
+) -> list[str]:
+    """Extract embedded raster images (JPEG, PNG, etc.) from an open page.
+
+    Returns ``[]`` if the page has no images, or if the only image covers
+    >= 80% of the page area (page-background scan — not useful for RAG).
+    The raster is decoded via PyMuPDF's ``Document.extract_image(xref)``.
+    """
+    raw_images = pymupdf_page.get_images(full=True)
+    if not raw_images:
+        return []
+
+    page_area = pymupdf_page.rect.width * pymupdf_page.rect.height
+
+    saved: list[str] = []
+    photo_count = 0
+
+    for xref, *rest in raw_images:
+        # rest: width, height, bpc, colorspace, xref_name, smask, fname, compress
+        img_width = rest[0]
+        img_height = rest[1]
+
+        # Filter: page-background scan (>= 80% page area).
+        if img_width * img_height >= 0.80 * page_area:
+            continue
+
+        try:
+            pix = doc.extract_image(xref)
+        except Exception:
+            continue
+
+        if not pix:
+            continue
+
+        ext = pix.get("ext", "png")
+        ext = "png" if ext.lower() in {"jpeg", "jpg", "jpx", "jp2"} else ext
+        fname = f"page{page.page + 1:04d}_photo_{photo_count:02d}.{ext}"
+        fpath = img_dir / fname
+        fpath.write_bytes(pix["image"])  # pix["image"] is bytes
+
+        # Store relative path from output_dir.
+        saved.append(str(fpath.relative_to(output_dir)))
+        photo_count += 1
 
     return saved
 
@@ -113,65 +153,68 @@ def extract_raster_photos(
 # ---------------------------------------------------------------------------
 
 
-def extract_vector_diagrams(
+def _extract_vector_diagrams(
+    pymupdf_page: pymupdf.Page,
     page: PageResult,
-    pdf_path: str,
     output_dir: Path,
+    img_dir: Path,
 ) -> list[str]:
-    """Extract vector drawings from one page, rendered as PNG.
+    """Extract vector drawings from an open page, rendered as PNG.
 
-    Returns a list of relative paths from ``output_dir``. Each drawing whose
-    bounding rect has area >= ``_MIN_DIAGRAM_AREA`` is saved as a page-scale
-    PNG showing the vector paths on white. Small or empty drawings are skipped.
-
-    Engineering PDFs (ТКР1) have many tiny decorative paths; the area
-    threshold filters them. Diagrams are rendered via PyMuPDF pixmap.
+    Each drawing whose bounding rect has area >= ``_MIN_DIAGRAM_AREA`` is
+    saved as a page-scale PNG showing the vector paths on white. Small or
+    empty drawings are skipped. Engineering PDFs (ТКР1) have many tiny
+    decorative paths; the area threshold filters them.
     """
     import pymupdf
 
-    did = doc_id_from_path(pdf_path)
-    img_dir = page_images_dir(output_dir, did)
-
-    doc = pymupdf.open(pdf_path)
-    try:
-        pymupdf_page = doc[page.page]
-        if pymupdf_page is None:
-            return []
-        drawings = pymupdf_page.get_drawings()
-    finally:
-        doc.close()
-
+    drawings = pymupdf_page.get_drawings()
     if not drawings:
         return []
 
+    def _area(r: pymupdf.Rect) -> float:
+        # NB: pymupdf.Rect has no `.area` attribute — width*height is the
+        # stable arithmetic (a latent AttributeError hid here while the
+        # vector pass was default-off and untested with real drawings).
+        return abs((r.x1 - r.x0) * (r.y1 - r.y0))
+
     # Filter: keep only drawings with a meaningful bounding rect.
-    large = [d for d in drawings if (d.get("rect") or pymupdf.Rect()).area >= _MIN_DIAGRAM_AREA]
+    # Normalize first — get_drawings can emit inverted rects (x1 < x0),
+    # whose abs()-area passes the threshold but breaks pixmap rendering.
+    # Then clip to the page: drawings may extend past the page bounds,
+    # and rendering an out-of-page clip fails (FzErrorArgument).
+    page_rect = pymupdf_page.rect
+    large: list[pymupdf.Rect] = []
+    for d in drawings:
+        rect = d.get("rect") or pymupdf.Rect()
+        rect.normalize()
+        rect &= page_rect
+        if not rect.is_empty and _area(rect) >= _MIN_DIAGRAM_AREA:
+            large.append(rect)
     if not large:
         return []
 
     saved: list[str] = []
     diagram_count = 0
 
-    # Re-open doc once for all pixmap renders (vector drawing extraction).
-    doc2 = pymupdf.open(pdf_path)
-    try:
-        pymupdf_page2 = doc2[page.page]
-        if pymupdf_page2 is None:
-            return saved
-        zoom = 200 / 72.0  # 200 DPI
-        mat = pymupdf.Matrix(zoom, zoom)
+    zoom = 200 / 72.0  # 200 DPI
+    mat = pymupdf.Matrix(zoom, zoom)
 
-        for drawing in large:
-            rect: pymupdf.Rect = drawing.get("rect") or pymupdf.Rect()
-            pix = pymupdf_page2.get_pixmap(matrix=mat, clip=rect, alpha=False)
-
-            fname = f"page{page.page + 1:04d}_diagram_{diagram_count:02d}.png"
-            fpath = img_dir / fname
+    for rect in large:
+        fname = f"page{page.page + 1:04d}_diagram_{diagram_count:02d}.png"
+        fpath = img_dir / fname
+        try:
+            pix = pymupdf_page.get_pixmap(matrix=mat, clip=rect, alpha=False)
             pix.save(str(fpath))
+        except Exception as exc:
+            # One unrenderable clip must not fail the page's extraction
+            # (core counts a raised error in pages_image_failed).
+            logger.warning(
+                "page %d: diagram clip %s not rendered: %s", page.page + 1, rect, exc
+            )
+            continue
 
-            saved.append(str(fpath.relative_to(output_dir)))
-            diagram_count += 1
-    finally:
-        doc2.close()
+        saved.append(str(fpath.relative_to(output_dir)))
+        diagram_count += 1
 
     return saved

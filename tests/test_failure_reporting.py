@@ -56,7 +56,7 @@ def test_image_failure_counted(p5_pdf: Path, monkeypatch) -> None:
     def boom(*args, **kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr(core_mod, "extract_raster_photos", boom)
+    monkeypatch.setattr(core_mod, "extract_page_images", boom)
 
     ir, report = process_pdf(str(p5_pdf), RouterConfig())
     assert ir.pages[0].images == []

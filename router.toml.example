@@ -74,7 +74,9 @@ log_level = "info"          # debug | info | warning | error; default "warning"
 
 [renderers]
 # Which renderers run is chosen via --render (CLI only); default: all three.
-# output_dir = "out/"   # default: ./out/
+# output_dir = "out/"   # CLI output directory (--out > this key > ./out).
+#                       # Library calls (convert/process_pdf) write nothing
+#                       # unless output_dir= is passed explicitly.
 # page_markers = true   # insert <!-- page N --> in md renderer; default false
 [renderers.chunks]
 # max_tokens = 512      # default

@@ -50,7 +50,7 @@ def test_native_page_crash_counts_failed(p5_pdf: Path, monkeypatch) -> None:
     assert report.pages_native == 0
 
 
-def test_image_failure_counted(p5_pdf: Path, monkeypatch) -> None:
+def test_image_failure_counted(p5_pdf: Path, tmp_path: Path, monkeypatch) -> None:
     """Image extraction failure: ERROR log + report counter, text unaffected."""
 
     def boom(*args, **kwargs):
@@ -58,7 +58,8 @@ def test_image_failure_counted(p5_pdf: Path, monkeypatch) -> None:
 
     monkeypatch.setattr(core_mod, "extract_page_images", boom)
 
-    ir, report = process_pdf(str(p5_pdf), RouterConfig())
+    # output_dir= turns the image pass on (pure-by-default runs skip it).
+    ir, report = process_pdf(str(p5_pdf), RouterConfig(), output_dir=tmp_path)
     assert ir.pages[0].images == []
     assert report.pages_image_failed == 1
     assert report.pages_failed == 0  # text path is fine

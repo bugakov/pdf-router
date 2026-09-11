@@ -141,8 +141,7 @@ def test_process_pdf_distributes_images_across_pages() -> None:
     """
     with tempfile.TemporaryDirectory() as tmp:
         cfg = RouterConfig()
-        cfg.renderers.output_dir = Path(tmp)
-        ir, _ = process_pdf(str(PZU), cfg)
+        ir, _ = process_pdf(str(PZU), cfg, output_dir=Path(tmp))
         pages_with_files_on_disk = set()
         pages_with_images_in_ir = set()
         for img_dir in (Path(tmp)).glob("*/images"):
@@ -166,8 +165,7 @@ def test_process_pdf_ir_json_has_images_per_page() -> None:
     multiple pages, not just the last one."""
     with tempfile.TemporaryDirectory() as tmp:
         cfg = RouterConfig()
-        cfg.renderers.output_dir = Path(tmp)
-        ir, _ = process_pdf(str(PZU), cfg)
+        ir, _ = process_pdf(str(PZU), cfg, output_dir=Path(tmp))
         pages_with_imgs = [p for p in ir.pages if p.images]
         assert len(pages_with_imgs) >= 2, (
             f"expected at least 2 pages with images, got {len(pages_with_imgs)}: "

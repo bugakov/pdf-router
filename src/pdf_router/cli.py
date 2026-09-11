@@ -98,8 +98,6 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if enabled is not None:
         cfg.renderers.enabled = enabled
-    if args.out is not None:
-        cfg.renderers.output_dir = Path(args.out)
     log_level = (args.log_level or cfg.log_level).upper()
     logging.basicConfig(level=getattr(logging, log_level, logging.WARNING), format="%(levelname)s %(name)s: %(message)s")
 
@@ -127,17 +125,27 @@ def main(argv: list[str] | None = None) -> int:
     # itself never writes os.environ.
     wire_pdf_inspector_env(cfg)
 
+    # Output policy belongs to the caller: the CLI resolves the single output
+    # directory (--out > [renderers].output_dir > ./out) and passes it
+    # explicitly to the pipeline (sidecar images) and write_outputs (rendered
+    # files). The library core never reads the config key.
+    out_dir = (
+        Path(args.out)
+        if args.out is not None
+        else (cfg.renderers.output_dir or Path("out"))
+    )
+
     from pdf_router.core import process_pdf
 
     try:
-        ir, report = process_pdf(str(input_path), cfg)
+        ir, report = process_pdf(str(input_path), cfg, output_dir=out_dir)
     except Exception as exc:  # document-level failure → exit 3
         logger.error("document processing failed: %s", exc)
         print(f"error: {exc}", file=sys.stderr)
         return 3
 
     try:
-        write_outputs(ir, cfg.renderers.output_dir, input_path.stem, config=cfg.renderers)
+        write_outputs(ir, out_dir, input_path.stem, config=cfg.renderers)
     except OSError as exc:
         print(f"error: cannot write output: {exc}", file=sys.stderr)
         return 1

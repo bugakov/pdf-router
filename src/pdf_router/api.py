@@ -17,11 +17,20 @@ Three levels of control, in increasing depth:
 3. :func:`render_markdown` / :func:`render_chunks` / :func:`render_json` —
    render an IR you already hold (e.g. one loaded via :func:`from_dict`).
 
-Two rules this module exists to enforce:
+Three rules this module exists to enforce:
 
 - **Config is optional and polymorphic.** Every entry point accepts
   ``None | str | Path | RouterConfig``. ``None`` means built-in defaults, so a
-  caller never has to import ``RouterConfig`` just to get going.
+  caller never has to import ``RouterConfig`` just to get going. The value is
+  coerced **once, up front** (in :func:`convert` / :func:`process_pdf`), so a
+  bad TOML path fails before the first page is processed — never deep inside
+  a renderer after the pipeline has already run.
+- **The library writes nothing unless the call says so.** :func:`convert`
+  and :func:`process_pdf` are pure by default (no directories, no sidecar
+  files); ``output_dir=`` turns on sidecar image extraction;
+  :func:`write_outputs` writes rendered files. ``[renderers].output_dir``
+  in the config is the CLI's default directory — the library core never
+  reads it.
 - **Import must stay cheap.** Nothing here may import a heavy dependency
   (pymupdf, onnxruntime, rapidocr, requests, pdf_inspector) at module scope —
   ``tests/test_api.py::test_public_import_pulls_no_heavy_deps`` guards it.
@@ -193,6 +202,7 @@ def process_pdf(
     pdf_path: str | Path,
     *,
     config: str | Path | RouterConfig | None = None,
+    output_dir: str | Path | None = None,
     strict: bool = False,
 ) -> tuple[IR, ProcessingReport]:
     """Run the full routing pipeline. Returns ``(IR, ProcessingReport)``.
@@ -204,6 +214,11 @@ def process_pdf(
     Args:
         pdf_path: path to the PDF.
         config: ``None``, a TOML path, or a :class:`RouterConfig`.
+        output_dir: sidecar image directory. ``None`` (default) keeps the
+            run pure: nothing is written to disk and ``page.images`` stays
+            empty. A path turns on image extraction under
+            ``<output_dir>/<doc-id>/images/`` (relative paths stored on
+            ``page.images``).
         strict: raise :class:`ProcessingError` if any page failed. Default
             ``False`` reproduces the CLI's best-effort behaviour: failed pages
             carry ``PageResult.error`` and the rest of the document is fine.
@@ -213,7 +228,8 @@ def process_pdf(
         ProcessingError: ``strict=True`` and >=1 page failed.
     """
     cfg = _coerce_config(config)
-    ir, report = _pipeline(str(pdf_path), cfg)
+    out_dir = Path(output_dir) if output_dir is not None else None
+    ir, report = _pipeline(str(pdf_path), cfg, output_dir=out_dir)
     if strict and report.pages_failed:
         raise ProcessingError(report)
     return ir, report
@@ -228,15 +244,20 @@ def convert(
     """Convert a PDF to LLM-ready Markdown in one call.
 
     ``pdf_router.convert("scan.pdf")`` is the whole integration. Writes no
-    files and needs no configuration.
+    files and needs no configuration — the pipeline runs fully in memory
+    (sidecar images are :func:`process_pdf` territory, via ``output_dir=``).
+
+    The config is coerced once, up front: a typo'd TOML path raises
+    :class:`ConfigError` before any page is processed.
 
     Raises:
         ConfigError: bad ``config``.
         ProcessingError: ``strict=True`` and >=1 page failed. Without
             ``strict``, a failed page simply contributes an empty section.
     """
-    ir, _ = process_pdf(pdf_path, config=config, strict=strict)
-    return render_markdown(ir, config=config)
+    cfg = _coerce_config(config)
+    ir, _ = process_pdf(pdf_path, config=cfg, strict=strict)
+    return render_markdown(ir, config=cfg)
 
 
 def render_markdown(ir: IR, *, config: RendererConfig | RouterConfig | None = None) -> str:

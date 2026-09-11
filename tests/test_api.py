@@ -184,12 +184,39 @@ def test_load_config_missing_path_is_error(tmp_path: Path) -> None:
         load_config(tmp_path / "nope.toml")
 
 
-def test_entry_points_accept_all_config_shapes(p5_pdf: Path) -> None:
-    """``None``, TOML path and RouterConfig all work for the same call."""
+def test_entry_points_accept_all_config_shapes(p5_pdf: Path, tmp_path: Path) -> None:
+    """``None``, TOML path (str and Path) and RouterConfig all work for the
+    same call — and produce the same result."""
+    toml = tmp_path / "router.toml"
+    toml.write_text("", encoding="utf-8")  # empty file → built-in defaults
     ir1, rep1 = process_pdf(p5_pdf, config=None)
     ir2, rep2 = process_pdf(p5_pdf, config=load_config())
-    assert ir1.pages[0].markdown == ir2.pages[0].markdown
-    assert rep1.pages_total == rep2.pages_total == 1
+    ir3, rep3 = process_pdf(p5_pdf, config=str(toml))
+    ir4, rep4 = process_pdf(p5_pdf, config=toml)
+    expected = ir1.pages[0].markdown
+    assert ir2.pages[0].markdown == expected
+    assert ir3.pages[0].markdown == expected
+    assert ir4.pages[0].markdown == expected
+    assert rep1.pages_total == rep2.pages_total == rep3.pages_total == rep4.pages_total == 1
+
+
+def test_convert_accepts_toml_path(p5_pdf: Path, tmp_path: Path) -> None:
+    """REGRESSION (embedding candidate #1): ``convert(config="router.toml")``
+    used to raise ConfigError from the *renderer* — the raw str/Path leaked
+    past _coerce_config after the whole pipeline had already run. The TOML
+    path must be coerced once, up front."""
+    toml = tmp_path / "router.toml"
+    toml.write_text("", encoding="utf-8")
+    by_str = convert(p5_pdf, config=str(toml))
+    by_path = convert(p5_pdf, config=toml)
+    assert by_str == by_path
+    assert by_str.strip()
+
+
+def test_convert_missing_config_path_raises(p5_pdf: Path, tmp_path: Path) -> None:
+    """A typo'd TOML path fails fast — before any page is processed."""
+    with pytest.raises(ConfigError, match="not found"):
+        convert(p5_pdf, config=tmp_path / "nope.toml")
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +241,51 @@ def test_convert_returns_markdown_string(p5_pdf: Path) -> None:
     assert md.strip()
 
 
+# ---------------------------------------------------------------------------
+# Output policy: pure by default, output_dir= is the only IO switch
+# ---------------------------------------------------------------------------
+
+
+def test_process_pdf_is_pure_by_default(
+    p5_pdf: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No output_dir → nothing on disk (README contract: "no files written").
+
+    REGRESSION (embedding candidate #2): the pipeline used to unconditionally
+    mkdir config.renderers.output_dir (default ./out), so even a pure
+    convert() left an ./out/ sidecar directory behind."""
+    monkeypatch.chdir(tmp_path)
+    ir, report = process_pdf(p5_pdf)
+    assert report.pages_total == 1
+    assert list(tmp_path.iterdir()) == []
+    assert all(p.images == [] for p in ir.pages)
+
+
+def test_convert_is_pure_even_when_config_sets_output_dir(
+    p5_pdf: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """convert() never writes — even with a TOML that sets output_dir.
+    Sidecar images are process_pdf(…, output_dir=…) territory; the config
+    key is the CLI's default, never read by the library core."""
+    (tmp_path / "router.toml").write_text(
+        '[renderers]\noutput_dir = "sidecars"\n', encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    md = convert(p5_pdf, config="router.toml")
+    assert md.strip()
+    assert not (tmp_path / "sidecars").exists()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["router.toml"]
+
+
+def test_process_pdf_output_dir_enables_sidecar_dir(p5_pdf: Path, tmp_path: Path) -> None:
+    """output_dir= turns the IO on: the sidecar root is created (p5 has no
+    raster images, so it may stay empty — the seam under test is the switch)."""
+    out = tmp_path / "side"
+    ir, _ = process_pdf(p5_pdf, output_dir=out)
+    assert out.is_dir()
+    assert ir.pages[0].images == []
+
+
 def test_strict_raises_when_pages_failed(p5_pdf: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """strict=True surfaces per-page failures instead of swallowing them."""
     import pdf_router.api as api
@@ -221,7 +293,9 @@ def test_strict_raises_when_pages_failed(p5_pdf: Path, monkeypatch: pytest.Monke
     real_ir, report = process_pdf(p5_pdf)
     report.pages_failed = 1  # simulate a partial failure as core would record it
 
-    def fake_pipeline(path: str, cfg: RouterConfig) -> tuple[IR, ProcessingReport]:
+    def fake_pipeline(
+        path: str, cfg: RouterConfig, *, output_dir: Path | None = None
+    ) -> tuple[IR, ProcessingReport]:
         return real_ir, report
 
     monkeypatch.setattr(api, "_pipeline", fake_pipeline)

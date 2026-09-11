@@ -2,6 +2,11 @@
 
 Pure function — no I/O. DESIGN §7.
 
+Each chunk carries per-page provenance so an ingest pipeline can filter:
+``page``, ``section``, ``src_tool``, ``error`` (``null`` for healthy pages —
+chunks from a failed page can be dropped without joining against the IR)
+and ``images`` (relative sidecar paths).
+
 Token counting uses ``len(text) // 4`` — a deliberately rough heuristic
 (documented here) that keeps the renderer dependency-free and deterministic.
 Chunks longer than ``max_tokens`` are hard-split with ``overlap_tokens``
@@ -91,6 +96,7 @@ def render(ir: IR, *, config: RendererConfig) -> str:
                             "page": page.page,
                             "section": section,
                             "src_tool": page.src_tool.value,
+                            "error": page.error,  # None for healthy pages
                             "images": list(page.images),  # relative paths from output_dir
                         },
                         ensure_ascii=False,

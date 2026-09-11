@@ -52,7 +52,15 @@ def test_chunks_jsonl_structure() -> None:
     assert lines, "expected at least one chunk"
     for ln in lines:
         chunk = json.loads(ln)
-        assert set(chunk) == {"chunk_id", "text", "page", "section", "src_tool", "images"}
+        assert set(chunk) == {
+            "chunk_id",
+            "text",
+            "page",
+            "section",
+            "src_tool",
+            "error",
+            "images",
+        }
 
 
 def test_chunks_sections_and_pages() -> None:
@@ -64,6 +72,20 @@ def test_chunks_sections_and_pages() -> None:
     assert pages == {0, 1}
     tools = {c["src_tool"] for c in chunks}
     assert tools == {"pdf_inspector", "tesseract"}
+
+
+def test_chunks_carry_page_error() -> None:
+    """Reliability signal for RAG: chunks from a failed page carry
+    ``page.error`` so an ingest pipeline can drop them without joining
+    against the IR; healthy pages carry ``null``."""
+    ir = make_ir()
+    ir.pages[1].error = "rapidocr_failed: engine exploded"
+    out = chunks_renderer.render(ir, config=RendererConfig())
+    chunks = [json.loads(ln) for ln in out.splitlines() if ln.strip()]
+    assert all(c["error"] is None for c in chunks if c["page"] == 0)
+    failed = [c for c in chunks if c["page"] == 1]
+    assert failed
+    assert all(c["error"] == "rapidocr_failed: engine exploded" for c in failed)
 
 
 def test_chunks_long_block_split_with_overlap() -> None:

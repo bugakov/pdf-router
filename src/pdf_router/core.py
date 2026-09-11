@@ -47,11 +47,23 @@ def _engine_to_src_tool(engine: str) -> SrcTool:
     return SrcTool(engine)
 
 
-def process_pdf(pdf_path: str | Path, config: RouterConfig) -> tuple[IR, ProcessingReport]:
+def process_pdf(
+    pdf_path: str | Path,
+    config: RouterConfig,
+    *,
+    output_dir: Path | None = None,
+) -> tuple[IR, ProcessingReport]:
     """Full routing pipeline. Returns (IR, ProcessingReport).
 
     ``pdf_path`` accepts str or Path — coerced here so every downstream
     call (Rust pyo3 boundary, subprocess args) receives a plain str.
+
+    ``output_dir`` is the pipeline's ONLY IO switch. ``None`` (the default)
+    keeps the whole run in memory: no directories created, no sidecar
+    images extracted, ``page.images`` stays ``[]``. A path turns on sidecar
+    image extraction under ``<output_dir>/<doc-id>/images/``. The pipeline
+    never reads ``config.renderers.output_dir`` — output policy belongs to
+    the caller (API facade / CLI), not to the config.
     """
     from pdf_router.adapters.pdf_inspector import extract_ir
 
@@ -60,8 +72,8 @@ def process_pdf(pdf_path: str | Path, config: RouterConfig) -> tuple[IR, Process
     doc = extract_ir(pdf_path)
     report = ProcessingReport(pages_total=len(doc.pages))
 
-    output_dir = config.renderers.output_dir
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     routing_cfg = config.routing
     workers = max(1, routing_cfg.workers or 2)
@@ -69,13 +81,19 @@ def process_pdf(pdf_path: str | Path, config: RouterConfig) -> tuple[IR, Process
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = []  # list of (page, img_fut, txt_fut)
         for page in doc.pages:
-            img_fut = pool.submit(
-                extract_page_images,
-                page,
-                pdf_path,
-                output_dir,
-                raster=routing_cfg.extract_raster_photos,
-                vector=routing_cfg.extract_vector_diagrams,
+            # Image extraction only runs when the caller asked for a sidecar
+            # directory; otherwise the pass is skipped entirely (pure run).
+            img_fut = (
+                pool.submit(
+                    extract_page_images,
+                    page,
+                    pdf_path,
+                    output_dir,
+                    raster=routing_cfg.extract_raster_photos,
+                    vector=routing_cfg.extract_vector_diagrams,
+                )
+                if output_dir is not None
+                else None
             )
             txt_fut = pool.submit(
                 _process_text_for_page,
@@ -87,12 +105,15 @@ def process_pdf(pdf_path: str | Path, config: RouterConfig) -> tuple[IR, Process
 
         for page, img_fut, txt_fut in futures:
             # Images are written to disk and their relative paths stored on the page.
-            try:
-                page.images = img_fut.result()
-            except Exception as exc:
-                logger.error("page %d: image extraction failed: %s", page.page + 1, exc)
-                page.images = []
-                report.pages_image_failed += 1
+            if img_fut is None:
+                page.images = []  # pure run: no sidecar IO at all
+            else:
+                try:
+                    page.images = img_fut.result()
+                except Exception as exc:
+                    logger.error("page %d: image extraction failed: %s", page.page + 1, exc)
+                    page.images = []
+                    report.pages_image_failed += 1
 
             # Text processing mutates page.markdown / src_tool / error.
             # Any unexpected (non-OcrError) exception is recorded on the page:

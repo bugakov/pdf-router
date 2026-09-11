@@ -62,10 +62,17 @@ class ChunksConfig:
 
 @dataclass
 class RendererConfig:
-    """Everything the renderers need (DESIGN §7). Shared by all three."""
+    """Everything the renderers need (DESIGN §7). Shared by all three.
+
+    ``output_dir`` is the **CLI's** default output directory (``--out`` flag
+    > this key > ``./out``). The library core never reads it:
+    :func:`pdf_router.convert` and :func:`pdf_router.process_pdf` write
+    nothing unless the caller passes ``output_dir=`` explicitly — an
+    embedded run stays in memory (README contract: "no files written").
+    """
 
     enabled: set[str] = field(default_factory=lambda: {"md", "chunks", "json"})
-    output_dir: Path = Path("out")
+    output_dir: Path | None = None
     page_markers: bool = False
     chunks: ChunksConfig = field(default_factory=ChunksConfig)
     json_include_page_bbox: bool = False

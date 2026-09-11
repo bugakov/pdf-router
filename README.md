@@ -43,11 +43,14 @@ lazily, so importing the package at app startup is cheap (~85 ms).
 ```python
 import pdf_router
 
-# One call, no config, no files written.
+# One call, no config, no files written — the pipeline runs in memory.
 markdown = pdf_router.convert("scan.pdf")
 
-# Full control: IR + per-page provenance + failure counts.
+# Full control: IR + per-page provenance + failure counts. Also pure by
+# default; pass output_dir= to extract sidecar page images
+# (<out>/<doc-id>/images/) — the only IO switch the pipeline has.
 ir, report = pdf_router.process_pdf("scan.pdf", config="router.toml")
+ir, report = pdf_router.process_pdf("scan.pdf", output_dir="sidecars/")
 for page in ir.pages:
     print(page.page + 1, page.src_tool, page.error or "ok")
 
@@ -60,8 +63,15 @@ paths = pdf_router.write_outputs(ir, "out/", "doc")
 
 Config is optional everywhere: `None` (built-in defaults), a TOML path, or a
 `RouterConfig` you tweaked in Python (`pdf_router.load_config()` returns the
-defaults for inspection/override). A missing explicit config path raises
-`ConfigError` — typos never silently change routing.
+defaults for inspection/override). The value is coerced once, up front, in
+every entry point — a missing explicit config path raises `ConfigError`
+before the first page is processed, so typos never silently change routing
+or burn a pipeline run.
+
+Output policy belongs to the call, not the config: `convert()` and
+`process_pdf()` write nothing unless you pass `output_dir=`. The
+`[renderers].output_dir` TOML key is the CLI's default directory
+(`--out` > TOML > `./out`); the library core never reads it.
 
 One exception to "no side effects": if you select the `pdf_inspector_ocr`
 engine, its Rust core reads two env vars (`PDFIUM_LIB_PATH`,
@@ -170,7 +180,7 @@ src/pdf_router/
   __init__.py           # public surface (re-exports api.py)
   api.py                # embedding facade: convert/process_pdf/render_*/write_outputs
   ir.py                 # IR dataclasses (the single shared contract)
-  core.py               # Router class + orchestration
+  core.py               # flat pipeline orchestration (process_pdf)
   config.py             # TOML loader
   cli.py                # argparse entry point
   adapters/

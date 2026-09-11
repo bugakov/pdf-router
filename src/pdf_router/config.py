@@ -35,6 +35,8 @@ _KNOWN_OCR_ENGINES = {"rapidocr", *OCR_ENGINE_REQUIRED_KEYS}
 
 _KNOWN_TOP_LEVEL = {"router", "ocr", "renderers", "routing"}
 _KNOWN_ROUTER_KEYS = {"log_level"}
+#: Accepted values for ``[router].log_level`` (case-insensitive).
+_VALID_LOG_LEVELS = ("debug", "info", "warning", "error")
 _KNOWN_RENDERERS_KEYS = {"output_dir", "page_markers", "chunks", "json"}
 _KNOWN_CHUNKS_KEYS = {"max_tokens", "overlap_tokens"}
 _KNOWN_JSON_KEYS = {"include_page_bbox"}
@@ -120,7 +122,12 @@ class RouterConfig:
         _warn_unknown(data.keys(), _KNOWN_TOP_LEVEL, "top-level")
 
         router_section = _section(data, "router", _KNOWN_ROUTER_KEYS)
-        log_level = str(router_section.get("log_level", "warning"))
+        log_level = str(router_section.get("log_level", "warning")).lower()
+        if log_level not in _VALID_LOG_LEVELS:
+            raise ConfigError(
+                f'[router].log_level: unknown value "{log_level}" '
+                f"(valid: {', '.join(_VALID_LOG_LEVELS)})"
+            )
 
         engines: dict[str, dict[str, Any]] = {}
         ocr_section = data.get("ocr", {})

@@ -64,6 +64,23 @@ include_page_bbox = true
     assert cfg.renderers.json_include_page_bbox is True
 
 
+def test_unknown_log_level_raises(tmp_path) -> None:
+    """Typo in [router].log_level fails at load, not a silent WARNING fallback."""
+    toml = tmp_path / "router.toml"
+    toml.write_text(
+        '[router]\nlog_level = "verbos"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match=r'log_level.*"verbos".*debug'):
+        RouterConfig.from_toml(toml)
+
+
+def test_log_level_case_insensitive(tmp_path) -> None:
+    toml = tmp_path / "router.toml"
+    toml.write_text('[router]\nlog_level = "INFO"\n', encoding="utf-8")
+    assert RouterConfig.from_toml(toml).log_level == "info"
+
+
 def test_missing_required_key_raises(tmp_path) -> None:
     toml = tmp_path / "router.toml"
     toml.write_text(

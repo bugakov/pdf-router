@@ -24,4 +24,17 @@ Blocked by: TKT-DX-01 (tool name), TKT-DX-02 (page semantics shape).
 
 ## Resolution
 
-_(open)_
+_Closed 2026-09-12 (grilling). All four sub-decisions approved._
+
+1. **New `Metadata.source_format: str = "pdf"`** field (`"pdf"|"docx"`;
+   djvu later). `pdf_type`, `is_complex_layout`, `has_encoding_issues`,
+   bbox frame stay honestly PDF-specific — not reinterpreted.
+2. **`SrcTool.DOCX_ADAPTER = "docx_adapter"`** — tool-neutral name; the
+   implementation (native stdlib parser) is an internal detail.
+3. **`IR_VERSION` "0.2" → "0.3"**; `to_dict`/`from_dict` round-trip extended
+   for `source_format` (one new key).
+4. **docx fills:** `pdf_type="text_based"` (born-digital text),
+   `confidence=1.0`, `is_complex_layout=False`, `has_encoding_issues=False`,
+   `source_format="docx"`, `src_tool=DOCX_ADAPTER`.
+
+Renderers untouched — `markdown` stays authoritative.

@@ -48,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["debug", "info", "warning", "error"],
         help="Override [router].log_level",
     )
-    parser.add_argument("input", nargs="?", help="Input document path (format detected by content; PDF today)")
+    parser.add_argument("input", nargs="?", help="Input document path (format detected by content; PDF and DOCX today)")
     return parser
 
 
@@ -102,36 +102,43 @@ def main(argv: list[str] | None = None) -> int:
     log_level = (args.log_level or cfg.log_level).upper()
     logging.basicConfig(level=getattr(logging, log_level, logging.WARNING), format="%(levelname)s %(name)s: %(message)s")
 
-    # --info: classify only, always exit 0 if the file was readable.
+    # --info: one door (TKT-DX-06): PDFs go to the Rust classifier, docx to
+    # the native inspector's metadata summary; other recognized formats are
+    # a typed refusal. Always exit 0 if the file was readable.
     if args.info:
         try:
             fmt = detect_format(input_path)
         except UnsupportedFormatError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
-        if fmt is not Format.PDF:
+        if fmt is Format.PDF:
+            import pdf_inspector
+
+            c = pdf_inspector.classify_pdf(str(input_path))
             print(
-                f"error: --info classifies PDFs only; input is {fmt.name}",
-                file=sys.stderr,
+                json.dumps(
+                    {
+                        "source_format": "pdf",
+                        "pdf_type": c.pdf_type,
+                        "page_count": c.page_count,
+                        "confidence": c.confidence,
+                        "pages_needing_ocr": list(c.pages_needing_ocr or []),
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                )
             )
-            return 1
+            return 0
+        if fmt is Format.DOCX:
+            from pdf_router.adapters.docx import docx_info
 
-        import pdf_inspector
-
-        c = pdf_inspector.classify_pdf(str(input_path))
+            print(json.dumps(docx_info(str(input_path)), indent=2, ensure_ascii=False))
+            return 0
         print(
-            json.dumps(
-                {
-                    "pdf_type": c.pdf_type,
-                    "page_count": c.page_count,
-                    "confidence": c.confidence,
-                    "pages_needing_ocr": list(c.pages_needing_ocr or []),
-                },
-                indent=2,
-                ensure_ascii=False,
-            )
+            f"error: --info does not support {fmt.name} yet",
+            file=sys.stderr,
         )
-        return 0
+        return 1
 
     # pdf-inspector's Rust core is env-wired (PDFIUM_LIB_PATH/ORT_DYLIB_PATH);
     # the CLI bridges the TOML paths into the process env here. The library

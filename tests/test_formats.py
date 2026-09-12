@@ -108,12 +108,12 @@ def test_detect_missing_file_raises_filenotfound(tmp_path: Path) -> None:
 
 
 def test_extension_ignored_docx_named_pdf(docx_path: Path, tmp_path: Path) -> None:
-    """A docx renamed to .pdf is DOCX by content — and unroutable."""
+    """A docx renamed to .pdf is DOCX by content — and routable as docx
+    (ADR-0003): the gate dispatches on bytes, the extension is noise."""
     disguised = tmp_path / "scan.pdf"
     disguised.write_bytes(docx_path.read_bytes())
     assert detect_format(disguised) is Format.DOCX
-    with pytest.raises(UnsupportedFormatError, match="DOCX"):
-        route(disguised)
+    assert callable(route(disguised))
 
 
 def test_extension_ignored_pdf_named_docx(p5_pdf: Path, tmp_path: Path) -> None:
@@ -134,17 +134,25 @@ def test_get_inspector_for_pdf_is_callable() -> None:
     assert callable(inspector)
 
 
-@pytest.mark.parametrize("fmt", [Format.DOCX, Format.DJVU])
-def test_get_inspector_rejects_unsupported(fmt: Format) -> None:
+def test_get_inspector_for_docx_is_callable() -> None:
+    """DOCX registered since ADR-0003 — the native stdlib inspector."""
+    inspector = get_inspector(Format.DOCX)
+    assert callable(inspector)
+
+
+def test_get_inspector_rejects_djvu() -> None:
     """Recognized-but-unregistered formats get a forward-looking message."""
     with pytest.raises(UnsupportedFormatError, match="does not support it yet"):
-        get_inspector(fmt)
+        get_inspector(Format.DJVU)
 
 
-def test_route_is_the_gate(docx_path: Path) -> None:
-    """route() = detect + lookup; one call, one error path."""
-    with pytest.raises(UnsupportedFormatError, match="DOCX"):
-        route(docx_path)
+def test_route_is_the_gate(tmp_path: Path) -> None:
+    """route() = detect + lookup; one call, one error path (djvu today —
+    docx passed this gate even before ADR-0003 registered its inspector)."""
+    djvu = tmp_path / "scan.djvu"
+    djvu.write_bytes(b"AT&TFORM\x00\x00\x00\x14DJVMDJVM")
+    with pytest.raises(UnsupportedFormatError, match="DJVU"):
+        route(djvu)
 
 
 def test_inspector_alias_is_path_to_ir_callable() -> None:

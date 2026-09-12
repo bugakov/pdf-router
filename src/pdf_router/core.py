@@ -1,13 +1,17 @@
 """v0.3 routing pipeline — flat functions, no adapter classes.
 
-Design (TKT-RT-01):
+Design (TKT-RT-01, extended by ADR-0003):
 1. route(pdf_path) — the format dispatcher picks the adapter (PDF →
-   pdf-inspector; docx/djvu are recognized but raise UnsupportedFormatError
-   until their adapters land).
+   pdf-inspector; DOCX → the native stdlib inspector; djvu is recognized
+   but raises UnsupportedFormatError until its adapter lands).
 2. For each page, in parallel (ThreadPoolExecutor):
-   - extract_images_for_page: raster + vector images, independent of text.
-   - process_text_for_page: looks_like_text per-page; OCR fallback all pages if needed.
-3. Return IR 0.2 with page.images populated.
+   - extract_images_for_page: raster + vector images (PDF) or media parts
+     (docx), independent of text.
+   - process_text_for_page (PDF only): looks_like_text per-page; OCR
+     fallback all pages if needed. DOCX is born-digital — its text is
+     authoritative, there is no OCR pass to fall back to (ADR-0003), so
+     the text pass is skipped entirely.
+3. Return IR 0.3 with page.images populated.
 
 Key decisions:
 - page.needs_ocr from pdf-inspector bypasses our looks_like_text (TKT-RT-03).
@@ -16,6 +20,10 @@ Key decisions:
 - OCR engine is one, configured via routing.ocr_fallback_engine (TKT-RT-06).
 - AdapterPdfInspector compat shim removed in v0.3 (RT-14). Core routes
   through pdf_router.formats (the dispatcher owns format -> adapter).
+- Sidecar image extraction is dispatched on Metadata.source_format (IR 0.3):
+  PDF → extract_images.extract_page_images, DOCX → the docx adapter's
+  extract_docx_images. This is pipeline machinery, not a second registry —
+  the inspector registry (formats.py) stays path -> IR only.
 """
 
 from __future__ import annotations
@@ -73,10 +81,16 @@ def process_pdf(
     t0 = time.perf_counter()
     # The format gate: magic bytes decide, not the extension. Raises
     # UnsupportedFormatError before any page work for content no inspector
-    # claims (docx/djvu today, unrecognized bytes).
+    # claims (djvu today, unrecognized bytes).
     inspector = route(pdf_path)
     doc = inspector(pdf_path)
     report = ProcessingReport(pages_total=len(doc.pages))
+
+    # Format-aware passes (IR 0.3, ADR-0003): the OCR/text-quality pass and
+    # the pymupdf image extractor are PDF machinery. A docx page is
+    # born-digital — its text is authoritative, its images are package
+    # media parts, and neither pass has anything to add.
+    is_pdf = doc.metadata.source_format == "pdf"
 
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -89,23 +103,27 @@ def process_pdf(
         for page in doc.pages:
             # Image extraction only runs when the caller asked for a sidecar
             # directory; otherwise the pass is skipped entirely (pure run).
-            img_fut = (
-                pool.submit(
-                    extract_page_images,
-                    page,
-                    pdf_path,
-                    output_dir,
-                    raster=routing_cfg.extract_raster_photos,
-                    vector=routing_cfg.extract_vector_diagrams,
-                )
-                if output_dir is not None
+            img_fut = None
+            if output_dir is not None:
+                if is_pdf:
+                    img_fut = pool.submit(
+                        extract_page_images,
+                        page,
+                        pdf_path,
+                        output_dir,
+                        raster=routing_cfg.extract_raster_photos,
+                        vector=routing_cfg.extract_vector_diagrams,
+                    )
+                else:
+                    from pdf_router.adapters.docx import extract_docx_images
+
+                    img_fut = pool.submit(
+                        extract_docx_images, page, pdf_path, output_dir
+                    )
+            txt_fut = (
+                pool.submit(_process_text_for_page, page, pdf_path, config)
+                if is_pdf
                 else None
-            )
-            txt_fut = pool.submit(
-                _process_text_for_page,
-                page,
-                pdf_path,
-                config,
             )
             futures.append((page, img_fut, txt_fut))
 
@@ -124,11 +142,13 @@ def process_pdf(
             # Text processing mutates page.markdown / src_tool / error.
             # Any unexpected (non-OcrError) exception is recorded on the page:
             # page.error is None *only* when the page really succeeded.
-            try:
-                txt_fut.result()
-            except Exception as exc:
-                page.error = f"internal_error: {type(exc).__name__}: {exc}"
-                logger.error("page %d: text processing failed: %s", page.page + 1, exc)
+            # (docx pages skip the pass entirely — see is_pdf above.)
+            if txt_fut is not None:
+                try:
+                    txt_fut.result()
+                except Exception as exc:
+                    page.error = f"internal_error: {type(exc).__name__}: {exc}"
+                    logger.error("page %d: text processing failed: %s", page.page + 1, exc)
 
     # Aggregate report. pages_failed counts ANY page carrying an error —
     # OCR failures and internal crashes alike (report must not contradict

@@ -33,10 +33,10 @@ Four rules this module exists to enforce:
   reads it.
 - **The format is detected by content, not by name.** Every entry point
   sniffs magic bytes before any page work (``pdf_router.formats``): a docx
-  renamed to ``.pdf`` is rejected, a PDF renamed to ``.docx`` converts.
-  Unroutable input (docx/djvu today, unrecognized bytes) raises
-  :class:`UnsupportedFormatError` at the boundary — never an untyped
-  error from deep inside the pipeline.
+  renamed to ``.pdf`` converts as docx, a PDF renamed to ``.docx``
+  converts as PDF. Unroutable input (djvu today, unrecognized bytes)
+  raises :class:`UnsupportedFormatError` at the boundary — never an
+  untyped error from deep inside the pipeline.
 - **Import must stay cheap.** Nothing here may import a heavy dependency
   (pymupdf, onnxruntime, rapidocr, requests, pdf_inspector) at module scope —
   ``tests/test_api.py::test_public_import_pulls_no_heavy_deps`` guards it.
@@ -221,7 +221,7 @@ def process_pdf(
 
     Args:
         pdf_path: path to the document. The format is detected from magic
-            bytes, not the extension; today only PDF is routable.
+            bytes, not the extension; PDF and DOCX are routable today.
         config: ``None``, a TOML path, or a :class:`RouterConfig`.
         output_dir: sidecar image directory. ``None`` (default) keeps the
             run pure: nothing is written to disk and ``page.images`` stays
@@ -260,9 +260,9 @@ def convert(
 
     The config is coerced once, up front: a typo'd TOML path raises
     :class:`ConfigError` before any page is processed. The format is
-    detected from magic bytes too: a docx renamed to ``.pdf`` raises
-    :class:`UnsupportedFormatError`, a PDF renamed to ``.docx`` converts
-    normally.
+    detected from magic bytes too: a docx renamed to ``.pdf`` converts as
+    docx, a PDF renamed to ``.docx`` converts as PDF, unrecognized content
+    raises :class:`UnsupportedFormatError`.
 
     Raises:
         ConfigError: bad ``config``.

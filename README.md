@@ -1,6 +1,6 @@
 # pdf-router
 
-Ultra-minimal, deterministic PDF → LLM-ready Markdown router.
+Ultra-minimal, deterministic PDF/DOCX → LLM-ready Markdown router.
 
 Primary inputs: scientific journals, monographs, project documentation.
 Output: per-page markdown (with optional page markers), RAG-ready JSONL
@@ -24,13 +24,16 @@ native wheel (≥ 1.17).
 # Process a PDF with all three renderers
 pdf-router path/to/file.pdf
 
+# Same for a docx — native stdlib parser, no external binaries (ADR-0003)
+pdf-router path/to/том.docx
+
 # Only the markdown output
 pdf-router --render md path/to/file.pdf
 
 # Page markers in markdown
 pdf-router --render md --render-opts '{"page_markers": true}' path/to/file.pdf
 
-# Print metadata only (no rendering)
+# Print metadata only (no rendering): PDFs classify, docx inspects
 pdf-router --info path/to/file.pdf
 ```
 
@@ -69,11 +72,20 @@ before the first page is processed, so typos never silently change routing
 or burn a pipeline run.
 
 Input format is detected from **magic bytes, not the file extension**.
-Today only PDF is routable; DOCX and DJVU are recognized and rejected with
+Today PDF and DOCX are routable; DJVU is recognized and rejected with
 `UnsupportedFormatError` at the API boundary — before any page work — until
-their adapters land. A docx renamed to `.pdf` is rejected; a PDF renamed to
-`.docx` converts normally. Adding a format means one registry entry in
+its adapter lands. A docx renamed to `.pdf` converts as docx; a PDF renamed
+to `.docx` converts as PDF. Adding a format means one registry entry in
 `src/pdf_router/formats.py`; nothing downstream changes.
+
+DOCX is parsed **natively** (stdlib `zipfile` + ElementTree, ADR-0003):
+`w:pStyle` resolves through `word/styles.xml` to exact heading levels,
+`w:tbl` yields exact 2D rows (gridSpan expanded, vMerge continuations
+repeat the restart value), `word/media/*` becomes sidecar images. The
+whole document is one pageless IR page (`source_format="docx"`,
+`pdf_type="text_based"`, confidence 1.0 — no OCR pass exists or is
+needed). No external binaries, milliseconds per document; scanned docx
+is out of scope (not present in the corpus).
 
 Output policy belongs to the call, not the config: `convert()` and
 `process_pdf()` write nothing unless you pass `output_dir=`. The
@@ -118,27 +130,33 @@ name — is a `ConfigError` at load, before any page is processed.
 ┌────────────────┐    ┌──────┐    ┌──────────┐    ┌─────────────┐
 │ pdf_inspector  │ →  │ IR   │ →  │ md       │ →  │ file.md     │
 │ (Rust napi)    │    │(data │ →  │ chunks   │ →  │ .chunks.jsonl│
-│                │    │ class│ →  │ json     │ →  │ .ir.json    │
-└────────────────┘    └──────┘    └──────────┘    └─────────────┘
-                       │
-                       ↓
+└────────────────┘    │ class│ →  │ json     │ →  │ .ir.json    │
+┌────────────────┐    └──────┘    └──────────┘    └─────────────┘
+│ docx adapter   │ →     ↑
+│ (stdlib only)  │       │
+└────────────────┘       ↓
                 ┌────────────┐
-                │ OCR engine │ (opt-in, per page)
+                │ OCR engine │ (PDF only, opt-in, per page)
                 └────────────┘
 ```
 
-- **One** `process_pdf` call (always-loaded adapter).
-- **Zero or more** OCR calls per page, via the single configured
+- **One** `process_pdf` call — the format gate (`formats.route()`) picks
+  the inspector (PDF → pdf-inspector adapter; DOCX → the native stdlib
+  adapter).
+- **Zero or more** OCR calls per PDF page, via the single configured
   `[routing].ocr_fallback_engine` (params from its `[ocr.*]` section).
+  DOCX is born-digital — no OCR pass exists for it.
 - **One** set of renderers, each reading the same IR.
 
 See `docs/glossary.md` for terms and `docs/adr/` for design decisions.
 
-## IR contract (0.2)
+## IR contract (0.3)
 
 ```python
 {
+  "ir_version": "0.3",
   "metadata": {
+    "source_format": "pdf" | "docx",   # IR 0.3 — the container format
     "pdf_type": "text_based" | "scanned" | "image_based" | "mixed",
     "page_count": int,
     "pages_with_tables": list[int],   # 1-indexed
@@ -147,12 +165,13 @@ See `docs/glossary.md` for terms and `docs/adr/` for design decisions.
   },
   "pages": [
     {
-      "page": int,                    # 0-indexed
+      "page": int,                    # 0-indexed; docx = single page 0
       "markdown": str,                # authoritative for md/chunks renderers
-      "src_tool": "pdf_inspector" | ...,
-      "blocks": [                     # IR 0.2 — advisory
-        {"kind": "HeadingBlock", "level": int, "text": str, "bbox": {...} | null, "source": "structure_tree"|"font_size_fallback"},
+      "src_tool": "pdf_inspector" | "docx_adapter" | ...,
+      "blocks": [                     # advisory
+        {"kind": "HeadingBlock", "level": int, "text": str, "bbox": {...} | null, "source": "structure_tree"|"font_size_fallback"|"docx_style"},
         {"kind": "TableBlock", "markdown": str, "rows": list[list[str]], "header_rows": int, "bbox": ...},
+        {"kind": "FigureBlock", "bbox": null, "caption": str | null, "image_index": int | null},
         ...
       ]
     }
@@ -160,10 +179,11 @@ See `docs/glossary.md` for terms and `docs/adr/` for design decisions.
 }
 ```
 
-`PageResult.markdown` is preserved verbatim from pdf-inspector;
-`blocks` is a structural decomposition populated when the adapter has
-upstream data for it. See
-[ADR-0001](docs/adr/0001-ir-structural-blocks.md).
+`PageResult.markdown` is preserved verbatim from the inspector (PDF:
+pdf-inspector; DOCX: the native adapter); `blocks` is a structural
+decomposition populated when the adapter has upstream data for it. See
+[ADR-0001](docs/adr/0001-ir-structural-blocks.md) and
+[ADR-0003](docs/adr/0003-docx-native-parse.md).
 
 ## Indexing
 
@@ -192,19 +212,22 @@ src/pdf_router/
   config.py             # TOML loader
   cli.py                # argparse entry point
   adapters/
-    pdf_inspector.py    # always-loaded (text path + structural blocks)
+    pdf_inspector.py    # PDF: always-loaded (text path + structural blocks)
+    docx.py             # DOCX: native stdlib parser (ADR-0003)
   ocr.py                # flat OCR engines: rapidocr/pdf_inspector_ocr/tesseract/glm/deepseek
   renderers/
     md.py, chunks.py, json_renderer.py
 tests/
   test_ir.py                    # IR round-trip
   test_ir_structural_blocks.py  # IR 0.2 block anchors (p5 + ТКР1)
+  test_docx.py                  # docx: synthetic control + golden volumes
   test_p5.py, test_p27.py, test_big_test.py   # golden anchors
   test_api.py                   # public-surface contract + import-cost guard
   test_renderers.py, test_conventions.py, ...
 docs/
   glossary.md           # terms
   adr/0001-ir-structural-blocks.md
+  adr/0003-docx-native-parse.md
 ```
 
 ## License

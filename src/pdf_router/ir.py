@@ -11,9 +11,15 @@ Indexing convention (locked):
   CropBox-relative frame (changed in 1.17.0).
 
 Structural blocks (``PageResult.blocks``) are populated by adapters that have
-access to structural data (pdf-inspector 1.17+). They are **advisory** — the
+access to structural data (pdf-inspector 1.17+, the native docx adapter).
+They are **advisory** — the
 authoritative text for legacy renderers (``md``, ``chunks``) remains
 ``PageResult.markdown``. See docs/adr/0001-ir-structural-blocks.md.
+
+IR 0.3 (ADR-0003, format-neutral contract): ``Metadata.source_format`` names
+the originating format ("pdf" | "docx"); ``SrcTool.DOCX_ADAPTER`` tags docx
+provenance. Renderers stay format-agnostic — they consume IR, never the
+source format.
 """
 
 from __future__ import annotations
@@ -22,7 +28,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
 
-IR_VERSION = "0.2"
+IR_VERSION = "0.3"
 
 
 class SrcTool(str, Enum):
@@ -34,6 +40,7 @@ class SrcTool(str, Enum):
     TESSERACT = "tesseract"
     GLM_OCR = "glm_ocr"
     DEEPSEEK_OCR = "deepseek_ocr"
+    DOCX_ADAPTER = "docx_adapter"
 
 
 @dataclass
@@ -46,7 +53,14 @@ class OcrReasonEntry:
 
 @dataclass
 class Metadata:
-    """Document-level facts, mapped from pdf-inspector's ``PdfResult``."""
+    """Document-level facts, mapped from pdf-inspector's ``PdfResult``.
+
+    ``pdf_type`` keeps its PDF-native vocabulary (text_based | scanned |
+    image_based | mixed) — it is honest about *how the text was obtained*.
+    Which container the text came from is ``source_format`` (IR 0.3):
+    "pdf" | "docx". A docx page is born-digital, so adapters report
+    ``pdf_type="text_based"`` with ``confidence=1.0`` — no OCR happened.
+    """
 
     pdf_type: str = "unknown"  # text_based | scanned | image_based | mixed
     page_count: int = 0
@@ -59,6 +73,7 @@ class Metadata:
     pages_with_columns: list[int] = field(default_factory=list)  # 1-indexed
     pages_needing_ocr: list[int] = field(default_factory=list)  # 1-indexed
     ocr_reasons_by_page: list[OcrReasonEntry] = field(default_factory=list)
+    source_format: str = "pdf"  # IR 0.3: "pdf" | "docx"
 
 
 # --- Structural blocks (IR 0.2) ----------------------------------------------
@@ -232,15 +247,14 @@ def to_dict(ir: IR, *, include_page_bbox: bool = False) -> dict[str, Any]:
             cls = type(b).__name__
             if cls not in _KIND_TO_CLS:
                 raise ValueError(f"unknown block class in to_dict: {cls!r}")
+            # Generic per-class serialization: asdict() recurses into BBox
+            # (yielding the {"x0":..} dict from_dict expects) and carries
+            # each block's own fields — TableBlock.markdown/rows included.
+            # (IR 0.2 hardcoded HeadingBlock fields here and crashed on
+            # TableBlock/FigureBlock — the docx adapter was the first
+            # producer of those, so the bug never surfaced.)
             d_block: dict[str, Any] = {"kind": cls}
-            d_block["level"] = b.level
-            d_block["text"] = b.text
-            d_block["bbox"] = (
-                {"x0": b.bbox.x0, "y0": b.bbox.y0, "x1": b.bbox.x1, "y1": b.bbox.y1}
-                if b.bbox is not None
-                else None
-            )
-            d_block["source"] = b.source
+            d_block.update(asdict(b))
             tagged.append(d_block)
         p["blocks"] = tagged
     return d
@@ -264,6 +278,8 @@ def from_dict(d: dict[str, Any]) -> IR:
             OcrReasonEntry(page=int(e["page"]), reasons=list(e.get("reasons", [])))
             for e in md.get("ocr_reasons_by_page", [])
         ],
+        # IR 0.2 dicts predate source_format; default keeps them loadable.
+        source_format=md.get("source_format", "pdf"),
     )
     pages: list[PageResult] = []
     for p in d.get("pages", []):

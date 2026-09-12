@@ -40,8 +40,9 @@ def big_test_pdf() -> Path:
 def docx_path(tmp_path: Path) -> Path:
     """Minimal structurally-valid docx (OOXML zip with word/document.xml).
 
-    Recognized by the format dispatcher, not yet routable — the fixture
-    behind the "docx next" seam (UnsupportedFormatError contract).
+    Fully routable since ADR-0003: the native stdlib inspector parses it
+    end-to-end. Kept tiny on purpose — the synthetic control for fast
+    unit tests (golden corpus volumes live in tests/test_docx.py).
     """
     content_types = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'

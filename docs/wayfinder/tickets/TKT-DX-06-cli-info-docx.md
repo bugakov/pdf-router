@@ -12,4 +12,9 @@ Blocked by: TKT-DX-03 (metadata contract).
 
 ## Resolution
 
-_(open)_
+_Closed 2026-09-12 (grilling)._
+
+**`--info` routes through the one front door** (format-aware): pdf →
+`classify_pdf`, docx → adapter metadata (title, table count, media count),
+unrecognized/unsupported → typed refusal. Kills the parallel API-bypass path
+(architecture-report candidate 5 residue).

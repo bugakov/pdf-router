@@ -26,4 +26,16 @@ option choice).
 
 ## Resolution
 
-_(open)_
+_Closed 2026-09-12 (grilling)._
+
+**Whole document = single page 0.**
+
+- docx is pageless; honest IR = one `PageResult(page=0)` per document.
+- Option 2 (split at Heading1) rejected: corpus has 0 heading styles (TKT-DX-01
+  ground truth) — it would degenerate to one section anyway.
+- Option 3 (explicit breaks) rejected: sparse and unreliable (Word repaginates
+  dynamically).
+- Consequences: 1-indexed metadata lists carry `[1]` (e.g. `pages_with_tables`);
+  `page.images` and `page.error` key to page 0; `chunks` renderer unaffected —
+  it splits markdown by `## ` headings, not by pages. "Page = extraction unit"
+  (report candidate 2): pdf → physical page, docx → whole document.

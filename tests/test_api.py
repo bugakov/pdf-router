@@ -226,30 +226,43 @@ def test_convert_missing_config_path_raises(p5_pdf: Path, tmp_path: Path) -> Non
 # ---------------------------------------------------------------------------
 
 
-def test_unsupported_format_raises_typed_error_at_boundary(docx_path: Path) -> None:
-    """REGRESSION (multi-format #1+#4): a docx used to die with an untyped
-    ValueError from the Rust pdfium boundary deep inside the pipeline. The
-    format gate now rejects it at the boundary with UnsupportedFormatError
-    — before any page work — for both entry points."""
-    with pytest.raises(UnsupportedFormatError, match="DOCX"):
-        convert(docx_path)
-    with pytest.raises(UnsupportedFormatError, match="DOCX"):
-        process_pdf(docx_path)
+def test_unsupported_format_raises_typed_error_at_boundary(tmp_path: Path) -> None:
+    """REGRESSION (multi-format #1+#4): unrecognized content used to die with
+    an untyped ValueError from the Rust pdfium boundary deep inside the
+    pipeline. The format gate now rejects it at the boundary with
+    UnsupportedFormatError — before any page work — for both entry points,
+    for both failure kinds: unrecognized bytes and recognized-but-unroutable
+    (djvu; docx joined the routable set in ADR-0003)."""
+    junk = tmp_path / "notes.txt"
+    junk.write_text("just some plain text", encoding="utf-8")
+    with pytest.raises(UnsupportedFormatError, match="unrecognized"):
+        convert(junk)
+    with pytest.raises(UnsupportedFormatError, match="unrecognized"):
+        process_pdf(junk)
+
+    djvu = tmp_path / "scan.djvu"
+    djvu.write_bytes(b"AT&TFORM\x00\x00\x00\x14DJVMDJVM")
+    with pytest.raises(UnsupportedFormatError, match="DJVU"):
+        convert(djvu)
+    with pytest.raises(UnsupportedFormatError, match="DJVU"):
+        process_pdf(djvu)
 
 
 def test_format_detected_by_content_not_extension(
     p5_pdf: Path, docx_path: Path, tmp_path: Path
 ) -> None:
-    """Magic bytes win: a PDF renamed to .docx still converts; a docx
-    renamed to .pdf is rejected (never reaches the pipeline)."""
+    """Magic bytes win: a PDF renamed to .docx still converts (as PDF); a
+    docx renamed to .pdf converts too — as docx (ADR-0003 made it routable;
+    the gate routes by content, never by extension)."""
     disguised_pdf = tmp_path / "scan.docx"
     shutil.copyfile(p5_pdf, disguised_pdf)
     assert convert(disguised_pdf).strip()
 
     disguised_docx = tmp_path / "report.pdf"
     shutil.copyfile(docx_path, disguised_docx)
-    with pytest.raises(UnsupportedFormatError, match="DOCX"):
-        convert(disguised_docx)
+    ir, report = process_pdf(disguised_docx)
+    assert ir.metadata.source_format == "docx"
+    assert report.pages_total == 1
 
 
 # ---------------------------------------------------------------------------

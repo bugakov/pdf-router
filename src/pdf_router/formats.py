@@ -12,16 +12,16 @@ halves:
 - :func:`route` composes both: the single gate every entry point funnels
   through, raising :class:`UnsupportedFormatError` *before any page work*.
 
-Supported today: PDF (via the pdf-inspector adapter). Recognized but not
-yet routable: DOCX, DJVU — the registry simply has no entry yet, and the
+Supported today: PDF (via the pdf-inspector adapter) and DOCX (via the
+native stdlib adapter, ADR-0003). Recognized but not
+yet routable: DJVU — the registry simply has no entry yet, and the
 error says so, so callers branch on a typed exception instead of parsing
 strings. Adding a format = one enum member + one magic-byte branch + one
 registry entry; nothing downstream changes.
 
-NB: everything *downstream* of the inspector (rasterize, OCR, sidecar
-image extraction) is still PDF-shaped (pymupdf pages). A non-PDF format
-either converts to PDF inside its own inspector, or those passes grow
-format awareness — an ADR decision, deliberately not made here.
+NB: the *sidecar image extraction* and OCR passes in core.py are still
+format-aware (pymupdf pages vs docx media parts); the dispatch on
+``Metadata.source_format`` lives there, not here.
 """
 
 from __future__ import annotations
@@ -70,9 +70,20 @@ def _pdf_inspector(path: str) -> IR:
     return extract_ir(path)
 
 
+def _docx_inspector(path: str) -> IR:
+    # Native stdlib parser (ADR-0003) — no heavy deps, but keep the lazy
+    # shape symmetric with the PDF inspector anyway.
+    from pdf_router.adapters.docx import extract_ir
+
+    return extract_ir(path)
+
+
 #: Format -> inspector registry. The dispatcher's single source of truth:
 #: core.py never imports an adapter directly.
-_INSPECTORS: dict[Format, Inspector] = {Format.PDF: _pdf_inspector}
+_INSPECTORS: dict[Format, Inspector] = {
+    Format.PDF: _pdf_inspector,
+    Format.DOCX: _docx_inspector,
+}
 
 # ZIP local/empty/spanned headers — any of them means "some zip package".
 _ZIP_MAGICS = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
@@ -128,7 +139,7 @@ def get_inspector(fmt: Format) -> Inspector:
 
     Raises:
         UnsupportedFormatError: the format is recognized but has no
-            inspector yet (DOCX, DJVU) — with a forward-looking message.
+            inspector yet (DJVU) — with a forward-looking message.
     """
     try:
         return _INSPECTORS[fmt]

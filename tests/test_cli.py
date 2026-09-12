@@ -99,20 +99,37 @@ def test_unknown_renderer_returns_1(p5_pdf, tmp_path, monkeypatch, capsys) -> No
 
 
 def test_unsupported_format_returns_1(
-    docx_path, tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys
 ) -> None:
-    """A docx is a usage error (exit 1), not a document failure (exit 3):
-    nothing was processed, the message names the detected format."""
+    """A recognized-but-unroutable format (djvu today; docx was here before
+    ADR-0003 made it routable) is a usage error (exit 1), not a document
+    failure (exit 3): nothing was processed, the message names the format."""
     monkeypatch.chdir(tmp_path)
-    code = cli.main([str(docx_path)])
+    djvu = tmp_path / "scan.djvu"
+    djvu.write_bytes(b"AT&TFORM\x00\x00\x00\x14DJVMDJVM")
+    code = cli.main([str(djvu)])
     assert code == 1
-    assert "DOCX" in capsys.readouterr().err
+    assert "DJVU" in capsys.readouterr().err
 
 
-def test_info_on_non_pdf_returns_1(
+def test_info_on_docx_through_one_door(
     docx_path, tmp_path, monkeypatch, capsys
 ) -> None:
-    """--info classifies PDFs only; a docx is rejected before the Rust call."""
+    """TKT-DX-06: --info is one door — PDFs classify via Rust, docx inspects
+    via the native adapter's metadata summary (same parser, no drift)."""
     monkeypatch.chdir(tmp_path)
-    assert cli.main(["--info", str(docx_path)]) == 1
-    assert "DOCX" in capsys.readouterr().err
+    code = cli.main(["--info", str(docx_path)])
+    assert code == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["source_format"] == "docx"
+    assert data["pdf_type"] == "text_based"
+    assert data["confidence"] == 1.0
+
+
+def test_info_on_djvu_returns_1(tmp_path, monkeypatch, capsys) -> None:
+    """--info refuses recognized-but-unroutable formats with a typed error."""
+    monkeypatch.chdir(tmp_path)
+    djvu = tmp_path / "scan.djvu"
+    djvu.write_bytes(b"AT&TFORM\x00\x00\x00\x14DJVMDJVM")
+    assert cli.main(["--info", str(djvu)]) == 1
+    assert "DJVU" in capsys.readouterr().err

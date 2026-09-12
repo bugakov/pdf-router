@@ -96,3 +96,23 @@ def test_exit_2_when_page_fails(p27_pdf, tmp_path, monkeypatch, capsys) -> None:
 def test_unknown_renderer_returns_1(p5_pdf, tmp_path, monkeypatch, capsys) -> None:
     monkeypatch.chdir(tmp_path)
     assert cli.main(["--render", "md,wat", str(p5_pdf)]) == 1
+
+
+def test_unsupported_format_returns_1(
+    docx_path, tmp_path, monkeypatch, capsys
+) -> None:
+    """A docx is a usage error (exit 1), not a document failure (exit 3):
+    nothing was processed, the message names the detected format."""
+    monkeypatch.chdir(tmp_path)
+    code = cli.main([str(docx_path)])
+    assert code == 1
+    assert "DOCX" in capsys.readouterr().err
+
+
+def test_info_on_non_pdf_returns_1(
+    docx_path, tmp_path, monkeypatch, capsys
+) -> None:
+    """--info classifies PDFs only; a docx is rejected before the Rust call."""
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["--info", str(docx_path)]) == 1
+    assert "DOCX" in capsys.readouterr().err

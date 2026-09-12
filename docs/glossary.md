@@ -31,11 +31,29 @@ A rectangle in PDF page-coordinate space defining the visible region of a
 page. pdf-inspector 1.17+ returns positions relative to `MediaBox ∩
 CropBox`; this changed in 1.17.0 (CHANGELOG).
 
+## Format dispatch
+
+The multi-format seam (`src/pdf_router/formats.py`): `detect_format()`
+sniffs **magic bytes** (never the file extension), `get_inspector()` maps a
+recognized `Format` to its inspector, `route()` is the single gate every
+entry point funnels through. Unroutable input (docx/djvu today,
+unrecognized bytes) raises `UnsupportedFormatError` before any page work.
+Adding a format = one enum member + one magic-byte branch + one registry
+entry; nothing downstream changes.
+
 ## IR (Intermediate Representation)
 
 The dataclass contract shared by adapters and renderers. Defined in
 `src/pdf_router/ir.py`. `IR_VERSION` is a string and bumps on
 non-backward-compatible changes; see ADR-0001 for the 0.1 → 0.2 bump.
+
+## Inspector
+
+The per-format adapter contract: one callable `path -> IR`
+(`src/pdf_router/formats.py`, `Inspector`). The pdf-inspector adapter's
+`extract_ir()` conforms; a docx inspector plugs in via the registry
+without touching `core.py` or the renderers. Flat functions by design
+(RT-14 deleted the adapter classes).
 
 ## Markdown (page-level)
 
@@ -70,18 +88,21 @@ adapters (`tests/test_conventions.py:37` enforces this).
 ## Router
 
 The orchestrator: flat `process_pdf(pdf_path, config)` in
-`src/pdf_router/core.py:47` — loads a PDF once via the always-loaded
-pdf-inspector adapter, fans text/OCR and image extraction out per page over
-a thread pool, and returns a complete IR plus a `ProcessingReport`.
+`src/pdf_router/core.py:47` — detects the input format via
+`formats.route()` and loads the document through the format's registered
+inspector (PDF → the always-loaded pdf-inspector adapter), fans text/OCR
+and image extraction out per page over a thread pool, and returns a
+complete IR plus a `ProcessingReport`.
 
 ## Public API
 
 The embedding surface: everything re-exported by `pdf_router/__init__.py`
 from `src/pdf_router/api.py` — `convert` (one call → Markdown),
 `process_pdf` (IR + report), `render_markdown`/`render_chunks`/`render_json`,
-`write_outputs`, `load_config`, plus the IR/config types. Submodules are
-implementation details; `tests/test_api.py` pins the contract (including the
-no-heavy-imports-at-startup rule).
+`write_outputs`, `load_config`, plus the IR/config types and the typed
+errors (`ConfigError`, `ProcessingError`, `UnsupportedFormatError`).
+Submodules are implementation details; `tests/test_api.py` pins the
+contract (including the no-heavy-imports-at-startup rule).
 
 ## SrcTool
 

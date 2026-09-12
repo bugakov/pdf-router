@@ -17,7 +17,7 @@ Three levels of control, in increasing depth:
 3. :func:`render_markdown` / :func:`render_chunks` / :func:`render_json` —
    render an IR you already hold (e.g. one loaded via :func:`from_dict`).
 
-Three rules this module exists to enforce:
+Four rules this module exists to enforce:
 
 - **Config is optional and polymorphic.** Every entry point accepts
   ``None | str | Path | RouterConfig``. ``None`` means built-in defaults, so a
@@ -31,6 +31,12 @@ Three rules this module exists to enforce:
   :func:`write_outputs` writes rendered files. ``[renderers].output_dir``
   in the config is the CLI's default directory — the library core never
   reads it.
+- **The format is detected by content, not by name.** Every entry point
+  sniffs magic bytes before any page work (``pdf_router.formats``): a docx
+  renamed to ``.pdf`` is rejected, a PDF renamed to ``.docx`` converts.
+  Unroutable input (docx/djvu today, unrecognized bytes) raises
+  :class:`UnsupportedFormatError` at the boundary — never an untyped
+  error from deep inside the pipeline.
 - **Import must stay cheap.** Nothing here may import a heavy dependency
   (pymupdf, onnxruntime, rapidocr, requests, pdf_inspector) at module scope —
   ``tests/test_api.py::test_public_import_pulls_no_heavy_deps`` guards it.
@@ -49,6 +55,7 @@ from pdf_router.config import (
     RouterConfig,
 )
 from pdf_router.core import ProcessingReport, process_pdf as _pipeline
+from pdf_router.formats import UnsupportedFormatError
 from pdf_router.ir import (
     IR,
     IR_VERSION,
@@ -65,6 +72,7 @@ __all__ = [
     "ConfigError",
     "ProcessingError",
     "ProcessingReport",
+    "UnsupportedFormatError",
     "convert",
     "load_config",
     "process_pdf",
@@ -212,7 +220,8 @@ def process_pdf(
     (native/OCR/failed counts).
 
     Args:
-        pdf_path: path to the PDF.
+        pdf_path: path to the document. The format is detected from magic
+            bytes, not the extension; today only PDF is routable.
         config: ``None``, a TOML path, or a :class:`RouterConfig`.
         output_dir: sidecar image directory. ``None`` (default) keeps the
             run pure: nothing is written to disk and ``page.images`` stays
@@ -225,6 +234,8 @@ def process_pdf(
 
     Raises:
         ConfigError: bad ``config``.
+        UnsupportedFormatError: the input is not a routable document
+            (checked before any page work).
         ProcessingError: ``strict=True`` and >=1 page failed.
     """
     cfg = _coerce_config(config)
@@ -248,10 +259,15 @@ def convert(
     (sidecar images are :func:`process_pdf` territory, via ``output_dir=``).
 
     The config is coerced once, up front: a typo'd TOML path raises
-    :class:`ConfigError` before any page is processed.
+    :class:`ConfigError` before any page is processed. The format is
+    detected from magic bytes too: a docx renamed to ``.pdf`` raises
+    :class:`UnsupportedFormatError`, a PDF renamed to ``.docx`` converts
+    normally.
 
     Raises:
         ConfigError: bad ``config``.
+        UnsupportedFormatError: the input is not a routable document
+            (checked before any page work).
         ProcessingError: ``strict=True`` and >=1 page failed. Without
             ``strict``, a failed page simply contributes an empty section.
     """

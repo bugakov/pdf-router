@@ -25,6 +25,7 @@ from pdf_router.api import (
     RendererConfig,
     RouterConfig,
     SrcTool,
+    UnsupportedFormatError,
     convert,
     from_dict,
     load_config,
@@ -53,6 +54,7 @@ __all__ = [
     # Errors
     "ConfigError",
     "ProcessingError",
+    "UnsupportedFormatError",
     # Types
     "IR",
     "IR_VERSION",

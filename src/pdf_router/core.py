@@ -1,7 +1,9 @@
 """v0.3 routing pipeline — flat functions, no adapter classes.
 
 Design (TKT-RT-01):
-1. extract_ir(pdf_path) — pdf-inspector, always.
+1. route(pdf_path) — the format dispatcher picks the adapter (PDF →
+   pdf-inspector; docx/djvu are recognized but raise UnsupportedFormatError
+   until their adapters land).
 2. For each page, in parallel (ThreadPoolExecutor):
    - extract_images_for_page: raster + vector images, independent of text.
    - process_text_for_page: looks_like_text per-page; OCR fallback all pages if needed.
@@ -12,7 +14,8 @@ Key decisions:
 - looks_like_text is per-page, not per-block (TKT-RT-02).
 - OCR is per-page, one raster + one OCR call per page (TKT-RT-10).
 - OCR engine is one, configured via routing.ocr_fallback_engine (TKT-RT-06).
-- AdapterPdfInspector compat shim removed in v0.3 (RT-14). Use extract_ir() directly.
+- AdapterPdfInspector compat shim removed in v0.3 (RT-14). Core routes
+  through pdf_router.formats (the dispatcher owns format -> adapter).
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pdf_router.config import RouterConfig
+from pdf_router.formats import route
 from pdf_router.ir import IR, SrcTool
 from pdf_router.quality import looks_like_text
 from pdf_router.ocr import ocr_page, OcrError
@@ -65,11 +69,13 @@ def process_pdf(
     never reads ``config.renderers.output_dir`` — output policy belongs to
     the caller (API facade / CLI), not to the config.
     """
-    from pdf_router.adapters.pdf_inspector import extract_ir
-
     pdf_path = os.fspath(pdf_path)
     t0 = time.perf_counter()
-    doc = extract_ir(pdf_path)
+    # The format gate: magic bytes decide, not the extension. Raises
+    # UnsupportedFormatError before any page work for content no inspector
+    # claims (docx/djvu today, unrecognized bytes).
+    inspector = route(pdf_path)
+    doc = inspector(pdf_path)
     report = ProcessingReport(pages_total=len(doc.pages))
 
     if output_dir is not None:

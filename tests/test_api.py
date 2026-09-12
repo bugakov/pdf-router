@@ -15,6 +15,7 @@ relies on when it does ``import pdf_router`` and nothing else.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +33,7 @@ from pdf_router import (
     ProcessingError,
     ProcessingReport,
     RouterConfig,
+    UnsupportedFormatError,
     convert,
     from_dict,
     load_config,
@@ -217,6 +219,37 @@ def test_convert_missing_config_path_raises(p5_pdf: Path, tmp_path: Path) -> Non
     """A typo'd TOML path fails fast — before any page is processed."""
     with pytest.raises(ConfigError, match="not found"):
         convert(p5_pdf, config=tmp_path / "nope.toml")
+
+
+# ---------------------------------------------------------------------------
+# Format gate (multi-format candidates #1 + #4)
+# ---------------------------------------------------------------------------
+
+
+def test_unsupported_format_raises_typed_error_at_boundary(docx_path: Path) -> None:
+    """REGRESSION (multi-format #1+#4): a docx used to die with an untyped
+    ValueError from the Rust pdfium boundary deep inside the pipeline. The
+    format gate now rejects it at the boundary with UnsupportedFormatError
+    — before any page work — for both entry points."""
+    with pytest.raises(UnsupportedFormatError, match="DOCX"):
+        convert(docx_path)
+    with pytest.raises(UnsupportedFormatError, match="DOCX"):
+        process_pdf(docx_path)
+
+
+def test_format_detected_by_content_not_extension(
+    p5_pdf: Path, docx_path: Path, tmp_path: Path
+) -> None:
+    """Magic bytes win: a PDF renamed to .docx still converts; a docx
+    renamed to .pdf is rejected (never reaches the pipeline)."""
+    disguised_pdf = tmp_path / "scan.docx"
+    shutil.copyfile(p5_pdf, disguised_pdf)
+    assert convert(disguised_pdf).strip()
+
+    disguised_docx = tmp_path / "report.pdf"
+    shutil.copyfile(docx_path, disguised_docx)
+    with pytest.raises(UnsupportedFormatError, match="DOCX"):
+        convert(disguised_docx)
 
 
 # ---------------------------------------------------------------------------

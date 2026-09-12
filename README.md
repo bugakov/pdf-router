@@ -68,6 +68,13 @@ every entry point — a missing explicit config path raises `ConfigError`
 before the first page is processed, so typos never silently change routing
 or burn a pipeline run.
 
+Input format is detected from **magic bytes, not the file extension**.
+Today only PDF is routable; DOCX and DJVU are recognized and rejected with
+`UnsupportedFormatError` at the API boundary — before any page work — until
+their adapters land. A docx renamed to `.pdf` is rejected; a PDF renamed to
+`.docx` converts normally. Adding a format means one registry entry in
+`src/pdf_router/formats.py`; nothing downstream changes.
+
 Output policy belongs to the call, not the config: `convert()` and
 `process_pdf()` write nothing unless you pass `output_dir=`. The
 `[renderers].output_dir` TOML key is the CLI's default directory
@@ -168,7 +175,7 @@ upstream data for it. See
 ## Exit codes
 
 - `0` — full success.
-- `1` — usage / IO error (file not found, invalid config).
+- `1` — usage / IO error (file not found, invalid config, unsupported input format).
 - `2` — partial success (at least one page failed but pipeline completed);
   every failed page is listed on stderr, outputs are still written.
 - `3` — total failure (pdf-inspector raised on the document itself).
@@ -180,6 +187,7 @@ src/pdf_router/
   __init__.py           # public surface (re-exports api.py)
   api.py                # embedding facade: convert/process_pdf/render_*/write_outputs
   ir.py                 # IR dataclasses (the single shared contract)
+  formats.py            # format detection + inspector registry (multi-format seam)
   core.py               # flat pipeline orchestration (process_pdf)
   config.py             # TOML loader
   cli.py                # argparse entry point

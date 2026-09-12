@@ -2,7 +2,7 @@
 
 Exit codes (locked):
 - 0 — full success
-- 1 — usage / IO error (file not found, config invalid)
+- 1 — usage / IO error (file not found, config invalid, unsupported input format)
 - 2 — partial success (>=1 page failed, >=1 page succeeded)
 - 3 — total failure (pdf-inspector raised on the document itself)
 """
@@ -18,6 +18,7 @@ from pathlib import Path
 from pdf_router import __version__
 from pdf_router.config import ConfigError, RouterConfig
 from pdf_router.api import wire_pdf_inspector_env, write_outputs
+from pdf_router.formats import Format, UnsupportedFormatError, detect_format
 
 logger = logging.getLogger("pdf_router")
 
@@ -47,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["debug", "info", "warning", "error"],
         help="Override [router].log_level",
     )
-    parser.add_argument("input", nargs="?", help="Input PDF path")
+    parser.add_argument("input", nargs="?", help="Input document path (format detected by content; PDF today)")
     return parser
 
 
@@ -103,6 +104,18 @@ def main(argv: list[str] | None = None) -> int:
 
     # --info: classify only, always exit 0 if the file was readable.
     if args.info:
+        try:
+            fmt = detect_format(input_path)
+        except UnsupportedFormatError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if fmt is not Format.PDF:
+            print(
+                f"error: --info classifies PDFs only; input is {fmt.name}",
+                file=sys.stderr,
+            )
+            return 1
+
         import pdf_inspector
 
         c = pdf_inspector.classify_pdf(str(input_path))
@@ -139,6 +152,10 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         ir, report = process_pdf(str(input_path), cfg, output_dir=out_dir)
+    except UnsupportedFormatError as exc:
+        # Usage error, not a document failure: nothing was processed.
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     except Exception as exc:  # document-level failure → exit 3
         logger.error("document processing failed: %s", exc)
         print(f"error: {exc}", file=sys.stderr)

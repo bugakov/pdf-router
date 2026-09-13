@@ -140,19 +140,21 @@ def test_get_inspector_for_docx_is_callable() -> None:
     assert callable(inspector)
 
 
-def test_get_inspector_rejects_djvu() -> None:
-    """Recognized-but-unregistered formats get a forward-looking message."""
-    with pytest.raises(UnsupportedFormatError, match="does not support it yet"):
-        get_inspector(Format.DJVU)
+def test_get_inspector_for_djvu_is_callable() -> None:
+    """DJVU registered since ADR-0004 — the djvulibre subprocess inspector."""
+    inspector = get_inspector(Format.DJVU)
+    assert callable(inspector)
 
 
-def test_route_is_the_gate(tmp_path: Path) -> None:
-    """route() = detect + lookup; one call, one error path (djvu today —
-    docx passed this gate even before ADR-0003 registered its inspector)."""
-    djvu = tmp_path / "scan.djvu"
-    djvu.write_bytes(b"AT&TFORM\x00\x00\x00\x14DJVMDJVM")
-    with pytest.raises(UnsupportedFormatError, match="DJVU"):
-        route(djvu)
+def test_route_is_the_gate(docx_path: Path, tmp_path: Path) -> None:
+    """route() = detect + lookup; one call, one gate. Unrecognized bytes
+    still raise before any page work (docx passed this gate even before
+    ADR-0003 registered its inspector; djvu since ADR-0004)."""
+    junk = tmp_path / "blob.bin"
+    junk.write_bytes(b"\x00\x01\x02not-a-format")
+    with pytest.raises(UnsupportedFormatError, match="unrecognized"):
+        route(junk)
+    assert callable(route(docx_path))
 
 
 def test_inspector_alias_is_path_to_ir_callable() -> None:

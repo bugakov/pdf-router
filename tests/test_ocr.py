@@ -34,6 +34,19 @@ def _wire_runtime_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ORT_DYLIB_PATH", RUNTIME_ORT)
 
 
+def _tiny_pdf(tmp_path) -> str:
+    """A real 1-page PDF: ``_ocr_pdf_inspector`` validates magic bytes
+    before calling the Rust engine (ADR-0004 PDF-only refusal)."""
+    import pymupdf
+
+    p = tmp_path / "x.pdf"
+    d = pymupdf.open()
+    d.new_page()
+    p.write_bytes(d.tobytes())
+    d.close()
+    return str(p)
+
+
 def test_pdf_inspector_engine_signature_unchanged() -> None:
     """A1 must keep ``ocr_page(pdf_path, page_idx, config) -> (md, engine)``.
 
@@ -45,7 +58,7 @@ def test_pdf_inspector_engine_signature_unchanged() -> None:
     assert params == ["pdf_path", "page_idx", "config"]
 
 
-def test_pdf_inspector_ocr_calls_process_pdf_with_ocr(monkeypatch) -> None:
+def test_pdf_inspector_ocr_calls_process_pdf_with_ocr(monkeypatch, tmp_path) -> None:
     """A1: ``_ocr_pdf_inspector`` must use ``process_pdf_with_ocr``.
 
     Mocks the entire pdf_inspector module to assert:
@@ -66,9 +79,10 @@ def test_pdf_inspector_ocr_calls_process_pdf_with_ocr(monkeypatch) -> None:
     fake_pdf_inspector = MagicMock()
     fake_pdf_inspector.process_pdf_with_ocr.return_value = fake_result
 
+    pdf_path = _tiny_pdf(tmp_path)
     with patch.dict("sys.modules", {"pdf_inspector": fake_pdf_inspector}):
         result = _ocr_pdf_inspector(
-            "/tmp/x.pdf",
+            pdf_path,
             page_idx=4,
             params={
                 "offline": True,
@@ -80,7 +94,7 @@ def test_pdf_inspector_ocr_calls_process_pdf_with_ocr(monkeypatch) -> None:
     assert result == "ocr text"
     fake_pdf_inspector.process_pdf_with_ocr.assert_called_once()
     call = fake_pdf_inspector.process_pdf_with_ocr.call_args
-    assert call.args[0] == "/tmp/x.pdf"
+    assert call.args[0] == pdf_path
     assert call.kwargs["mode"] == "auto"
     assert call.kwargs["page_numbers"] == [5]  # 1-indexed
     assert call.kwargs["dpi"] == 200.0
@@ -88,7 +102,7 @@ def test_pdf_inspector_ocr_calls_process_pdf_with_ocr(monkeypatch) -> None:
     assert call.kwargs["offline"] is True
     assert call.kwargs["model_directory"] is None  # no model_cache_dir in params
 
-def test_pdf_inspector_ocr_default_params(monkeypatch) -> None:
+def test_pdf_inspector_ocr_default_params(monkeypatch, tmp_path) -> None:
     """Default dpi=150.0, minimum_confidence=0.0, offline=True when params are empty."""
     _wire_runtime_env(monkeypatch)
     fake_page = MagicMock()
@@ -102,7 +116,7 @@ def test_pdf_inspector_ocr_default_params(monkeypatch) -> None:
     fake_pdf_inspector.process_pdf_with_ocr.return_value = fake_result
 
     with patch.dict("sys.modules", {"pdf_inspector": fake_pdf_inspector}):
-        _ocr_pdf_inspector("/tmp/x.pdf", page_idx=0, params={})
+        _ocr_pdf_inspector(_tiny_pdf(tmp_path), page_idx=0, params={})
 
     call = fake_pdf_inspector.process_pdf_with_ocr.call_args
     assert call.kwargs["dpi"] == 150.0
@@ -110,7 +124,7 @@ def test_pdf_inspector_ocr_default_params(monkeypatch) -> None:
     assert call.kwargs["offline"] is True
 
 
-def test_pdf_inspector_ocr_passes_model_directory(monkeypatch) -> None:
+def test_pdf_inspector_ocr_passes_model_directory(monkeypatch, tmp_path) -> None:
     """``model_cache_dir`` goes to the ``model_directory`` kwarg — not to env."""
     _wire_runtime_env(monkeypatch)
     fake_page = MagicMock()
@@ -125,14 +139,14 @@ def test_pdf_inspector_ocr_passes_model_directory(monkeypatch) -> None:
 
     with patch.dict("sys.modules", {"pdf_inspector": fake_pdf_inspector}):
         _ocr_pdf_inspector(
-            "/tmp/x.pdf", page_idx=0, params={"model_cache_dir": "/tmp/models"}
+            _tiny_pdf(tmp_path), page_idx=0, params={"model_cache_dir": "/tmp/models"}
         )
 
     call = fake_pdf_inspector.process_pdf_with_ocr.call_args
     assert call.kwargs["model_directory"] == "/tmp/models"
 
 
-def test_pdf_inspector_ocr_does_not_write_environ(monkeypatch) -> None:
+def test_pdf_inspector_ocr_does_not_write_environ(monkeypatch, tmp_path) -> None:
     """Library contract: ``_ocr_pdf_inspector`` reads env, never writes it.
 
     Regression: the pre-facade code set PDFIUM_LIB_PATH/ORT_DYLIB_PATH (and
@@ -150,20 +164,20 @@ def test_pdf_inspector_ocr_does_not_write_environ(monkeypatch) -> None:
     fake_pdf_inspector.process_pdf_with_ocr.return_value = fake_result
 
     with patch.dict("sys.modules", {"pdf_inspector": fake_pdf_inspector}):
-        _ocr_pdf_inspector("/tmp/x.pdf", page_idx=0, params={})
+        _ocr_pdf_inspector(_tiny_pdf(tmp_path), page_idx=0, params={})
 
     assert dict(__import__("os").environ) == before
 
 
-def test_pdf_inspector_ocr_env_not_wired_raises(monkeypatch) -> None:
+def test_pdf_inspector_ocr_env_not_wired_raises(monkeypatch, tmp_path) -> None:
     """No env → hard error with the wiring instruction, no silent fallback."""
     monkeypatch.delenv("PDFIUM_LIB_PATH", raising=False)
     monkeypatch.delenv("ORT_DYLIB_PATH", raising=False)
     with pytest.raises(OcrError, match="env not wired"):
-        _ocr_pdf_inspector("/tmp/x.pdf", page_idx=0, params={})
+        _ocr_pdf_inspector(_tiny_pdf(tmp_path), page_idx=0, params={})
 
 
-def test_pdf_inspector_ocr_raises_on_empty_result(monkeypatch) -> None:
+def test_pdf_inspector_ocr_raises_on_empty_result(monkeypatch, tmp_path) -> None:
     """Empty markdown from pdf-inspector must raise OcrError, not return ''."""
     _wire_runtime_env(monkeypatch)
     fake_page = MagicMock()
@@ -178,10 +192,10 @@ def test_pdf_inspector_ocr_raises_on_empty_result(monkeypatch) -> None:
 
     with patch.dict("sys.modules", {"pdf_inspector": fake_pdf_inspector}):
         with pytest.raises(OcrError, match="empty pdf_inspector_ocr result"):
-            _ocr_pdf_inspector("/tmp/x.pdf", page_idx=2, params={})
+            _ocr_pdf_inspector(_tiny_pdf(tmp_path), page_idx=2, params={})
 
 
-def test_pdf_inspector_ocr_raises_if_page_missing(monkeypatch) -> None:
+def test_pdf_inspector_ocr_raises_if_page_missing(monkeypatch, tmp_path) -> None:
     """If pdf-inspector returns pages for a different number, raise OcrError."""
     _wire_runtime_env(monkeypatch)
     fake_page = MagicMock()
@@ -196,14 +210,15 @@ def test_pdf_inspector_ocr_raises_if_page_missing(monkeypatch) -> None:
 
     with patch.dict("sys.modules", {"pdf_inspector": fake_pdf_inspector}):
         with pytest.raises(OcrError, match="missing from pdf_inspector_ocr result"):
-            _ocr_pdf_inspector("/tmp/x.pdf", page_idx=0, params={})
+            _ocr_pdf_inspector(_tiny_pdf(tmp_path), page_idx=0, params={})
 
 
-def test_ocr_page_dispatches_to_engine(monkeypatch) -> None:
+def test_ocr_page_dispatches_to_engine(monkeypatch, tmp_path) -> None:
     """ocr_page routes the right engine to its implementation.
 
     With bogus env paths, the binary-presence guard fires before
     pdf_inspector is even called — so we get ``OcrError(binaries not found)``.
+    A real PDF is required: the engine validates magic bytes first.
     """
     monkeypatch.setenv("PDFIUM_LIB_PATH", "/nonexistent/libpdfium.so")
     monkeypatch.setenv("ORT_DYLIB_PATH", "/nonexistent/libonnxruntime.so")
@@ -215,7 +230,7 @@ def test_ocr_page_dispatches_to_engine(monkeypatch) -> None:
     }
 
     with pytest.raises(OcrError, match="binaries not found"):
-        ocr_page("/tmp/x.pdf", page_idx=0, config=cfg)
+        ocr_page(_tiny_pdf(tmp_path), page_idx=0, config=cfg)
 
 
 def test_ocr_page_unknown_engine_raises() -> None:

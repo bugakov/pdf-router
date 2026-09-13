@@ -48,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["debug", "info", "warning", "error"],
         help="Override [router].log_level",
     )
-    parser.add_argument("input", nargs="?", help="Input document path (format detected by content; PDF and DOCX today)")
+    parser.add_argument("input", nargs="?", help="Input document path (format detected by content; PDF, DOCX and DJVU today)")
     return parser
 
 
@@ -69,6 +69,34 @@ def _parse_renderers(raw: str | None) -> set[str] | None:
     if not requested:
         raise SystemExit("error: --render must name at least one renderer")
     return requested
+
+
+def _info_payload(fmt: Format, path: Path) -> dict:
+    """Build the ``--info`` JSON payload for a detected format (TKT-DX-06).
+
+    One door: every format answers from its own inspector's metadata
+    summary — the same parser the pipeline uses, no drift.
+    """
+    if fmt is Format.PDF:
+        import pdf_inspector
+
+        c = pdf_inspector.classify_pdf(str(path))
+        return {
+            "source_format": "pdf",
+            "pdf_type": c.pdf_type,
+            "page_count": c.page_count,
+            "confidence": c.confidence,
+            "pages_needing_ocr": list(c.pages_needing_ocr or []),
+        }
+    if fmt is Format.DOCX:
+        from pdf_router.adapters.docx import docx_info
+
+        return docx_info(str(path))
+    if fmt is Format.DJVU:
+        from pdf_router.adapters.djvu import djvu_info
+
+        return djvu_info(str(path))
+    raise UnsupportedFormatError(f"--info does not support {fmt.name} yet")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -102,43 +130,26 @@ def main(argv: list[str] | None = None) -> int:
     log_level = (args.log_level or cfg.log_level).upper()
     logging.basicConfig(level=getattr(logging, log_level, logging.WARNING), format="%(levelname)s %(name)s: %(message)s")
 
-    # --info: one door (TKT-DX-06): PDFs go to the Rust classifier, docx to
-    # the native inspector's metadata summary; other recognized formats are
-    # a typed refusal. Always exit 0 if the file was readable.
+    # --info: one door (TKT-DX-06): PDFs go to the Rust classifier, docx
+    # and djvu to their native inspectors' metadata summaries; other
+    # recognized formats are a typed refusal. A corrupt document is a
+    # document failure (exit 3), an unroutable format a usage error (1).
     if args.info:
         try:
             fmt = detect_format(input_path)
         except UnsupportedFormatError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
-        if fmt is Format.PDF:
-            import pdf_inspector
-
-            c = pdf_inspector.classify_pdf(str(input_path))
-            print(
-                json.dumps(
-                    {
-                        "source_format": "pdf",
-                        "pdf_type": c.pdf_type,
-                        "page_count": c.page_count,
-                        "confidence": c.confidence,
-                        "pages_needing_ocr": list(c.pages_needing_ocr or []),
-                    },
-                    indent=2,
-                    ensure_ascii=False,
-                )
-            )
-            return 0
-        if fmt is Format.DOCX:
-            from pdf_router.adapters.docx import docx_info
-
-            print(json.dumps(docx_info(str(input_path)), indent=2, ensure_ascii=False))
-            return 0
-        print(
-            f"error: --info does not support {fmt.name} yet",
-            file=sys.stderr,
-        )
-        return 1
+        try:
+            payload = _info_payload(fmt, input_path)
+        except UnsupportedFormatError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        except Exception as exc:  # corrupt document → document failure
+            print(f"error: {exc}", file=sys.stderr)
+            return 3
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
 
     # pdf-inspector's Rust core is env-wired (PDFIUM_LIB_PATH/ORT_DYLIB_PATH);
     # the CLI bridges the TOML paths into the process env here. The library

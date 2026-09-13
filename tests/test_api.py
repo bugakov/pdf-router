@@ -230,9 +230,12 @@ def test_unsupported_format_raises_typed_error_at_boundary(tmp_path: Path) -> No
     """REGRESSION (multi-format #1+#4): unrecognized content used to die with
     an untyped ValueError from the Rust pdfium boundary deep inside the
     pipeline. The format gate now rejects it at the boundary with
-    UnsupportedFormatError — before any page work — for both entry points,
-    for both failure kinds: unrecognized bytes and recognized-but-unroutable
-    (djvu; docx joined the routable set in ADR-0003)."""
+    UnsupportedFormatError — before any page work — for both entry points.
+
+    (djvu was the second subject here — recognized-but-unroutable; ADR-0004
+    made it routable, so djvu magic now routes and a corrupt body surfaces
+    as the adapter's typed DjvuError instead.)
+    """
     junk = tmp_path / "notes.txt"
     junk.write_text("just some plain text", encoding="utf-8")
     with pytest.raises(UnsupportedFormatError, match="unrecognized"):
@@ -242,9 +245,11 @@ def test_unsupported_format_raises_typed_error_at_boundary(tmp_path: Path) -> No
 
     djvu = tmp_path / "scan.djvu"
     djvu.write_bytes(b"AT&TFORM\x00\x00\x00\x14DJVMDJVM")
-    with pytest.raises(UnsupportedFormatError, match="DJVU"):
+    from pdf_router.adapters.djvu import DjvuError
+
+    with pytest.raises(DjvuError):
         convert(djvu)
-    with pytest.raises(UnsupportedFormatError, match="DJVU"):
+    with pytest.raises(DjvuError):
         process_pdf(djvu)
 
 

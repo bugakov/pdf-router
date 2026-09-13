@@ -18,4 +18,25 @@ Blocked by: TKT-DJV-02.
 
 ## Resolution
 
-_(open)_
+**Resolved (grilling, 2026-09-13).** Confirmed:
+
+1. **`page.images = []` for djvu, always — the image pass does not run.**
+   Same rule the router already applies to scanned pdf pages: an image
+   covering ≥80% of the page is filtered out as a page-background scan,
+   "not useful for RAG" (`src/pdf_router/extract_images.py:106-111`,
+   filter at `:127-128`). A djvu page IS that scan. The dispatch in
+   `core.py:108-122` becomes three-way: pdf → `extract_page_images`,
+   docx → `extract_docx_images`, djvu → skip.
+2. **No page-strip export.** Exporting page rasters as sidecar images
+   duplicates the page (the same raster OCR consumes), bloats disk
+   (209-page book × MBs), and contradicts the 80% filter's intent.
+   Page visuals as an opt-in feature = out of this map (note in
+   ADR-0004).
+3. **No `djvudump` chunks** (IW44 background, JB2 stencils) — decoder
+   internals, not figures; individually useless for RAG.
+4. **`extract_raster_photos` / `extract_vector_diagrams` flags are an
+   honest no-op for djvu** (documented in config/README).
+5. **Purity invariant holds trivially**: even with `output_dir` set,
+   djvu writes nothing under `images/`.
+6. **Side effect for TKT-DJV-11**: its image-pass consumer dissolves —
+   OCR is the only raster consumer left.

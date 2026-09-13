@@ -337,3 +337,116 @@ page) for chunk-structure debugging.
   `pyproject.toml`/`uv.lock` untouched; only
   `docs/wayfinder/research/djvu-tools.md` and the TKT-DJV-01 ticket's
   Resolution written.
+
+## TKT-DJV-12 — ddjvu per-page render baseline (measured 2026-09-12)
+
+Follow-up measurement validating the locked strategy-C mechanism (TKT-DJV-02:
+per-page `ddjvu` subprocess rendering) against the pipeline's parallel page
+model (ThreadPoolExecutor, `workers` default 2 — `config.py:85`,
+`core.py:99-101`). Method: throwaway probes (`/tmp/djvu_probe_tkt_djv_12.py`,
+`/tmp/djvu_mem_probe.py`, ephemeral, never saved into the repo) run via
+`uv run python` from the repo root (numpy 2.5.3 from the project env);
+read-only on `uploads/`. `time.perf_counter` around `subprocess.run` +
+PPM→numpy conversion; 5 repetitions per (file, page); P6 header parsed,
+payload mapped via `np.frombuffer(...).reshape(h, w, 3)` (zero-copy view)
+plus a writable `np.array` copy, as the OCR path would consume it. Pages
+probed: 1 / N÷2 / N per anchor.
+
+Anchors — the shortlist's small/typical/large plus two extras the question
+demanded (a 500+-page file for the re-decode penalty check; a 72-dpi page for
+the upscale case):
+
+| role | file | pages | size | INFO dpi |
+|---|---|---|---|---|
+| small | `4139_from_s3.djvu` | 25 | 0.34 MB | 600 |
+| typical | `._._2_32e52013.djvu` | 129 | 7.86 MB | 300 |
+| large | `4172_from_s3.djvu` | 247 | 21.69 MB | 600 |
+| huge (penalty check) | `._._-__451b9719.djvu` | 552 | 11.67 MB | 600 |
+| 72-dpi check | `-_3_b7754266.djvu` p222 | 231 | 12.28 MB | mixed: 221 pg @300 + 10 pg @72 |
+
+### Scale calibration — the mapping
+
+**`-scale=N` (unitless) = render at N dpi against each page's stored INFO
+dpi.** Cross-checked against `-size=WxH` targets (native × 150/dpi): agreement
+within ±2 px on all 12 calibration rows (ddjvu floors .5 fractions:
+4006/4 = 1001.5 → 1000, not 1002):
+
+| stored dpi | native → `-scale=150` output | factor |
+|---|---|---|
+| 600 | 3351×4641 → 837×1159 · 3376×5332 → 844×1333 · 4357×6712 → 1089×1677 | ÷4 |
+| 300 | 3600×2670 → 1800×1335 · 1919×2860 → 959×1429 | ÷2 |
+| 72 | 3590×2710 → 7478×5645 | ×2.083 (upscale) |
+
+Two gotchas the implementation must know:
+
+1. **`-scale=N%` (percent form) is NOT percent-of-native** — it is N% of the
+   100-dpi render: `-scale=25%` on a 600-dpi page gives 139×192 (a 25-dpi
+   image, 36× area loss). The unitless form is the correct knob.
+2. **Mixed-DPI files are real** (10/231 pages of `-_3_b7754266.djvu` are
+   72 dpi while the rest are 300): scale must be chosen per page, and 72-dpi
+   pages must be capped at native — literal 150-dpi upscaling of a 72-dpi
+   page costs 126.6 MB ppm / +248 MB RSS / 1.03 s vs 29.2 MB / +57 MB /
+   0.24 s at native (`-scale=72`), with zero information gain. Rule:
+   **`-scale=min(150, stored_dpi)`**.
+
+### Per-page wall time at 150 dpi (`-scale=150`, 5 reps, ms)
+
+total = spawn + decode + ppm→numpy (+ writable copy). Conversion-only
+(`frombuffer`+`reshape`) is 0.04–0.05 ms (zero-copy); the writable copy adds
+0.3–1.7 ms. Fixed floor: bare `ddjvu` spawn (usage-exit loop, n=10) =
+**53 ms** — decode+transfer is the remaining ~20–300 ms, tracking page
+complexity. Even full-native renders (46.7–87.7 MB ppm) stay ≤1.1 s
+(0.18–1.09 s).
+
+| anchor | pages probed | dims @150 dpi | ppm | spawn+decode min/med | total min/med |
+|---|---|---|---|---|---|
+| small | 1 · 12 · 25 | 837×1159 | 2.91 MB | 153/170 · 121/124 · 130/136 | 154/170 · 122/124 · 130/137 |
+| typical | 1 · 64 · 129 | 959×1429 · 1800×1335 | 4.11 / 7.21 MB | 314/318 · 146/148 · 95/105 | 315/319 · 147/149 · 96/106 |
+| large | 1 · 123 · 247 | 659×980 · 709×1000 · 658×1066 | 1.94–2.13 MB | 72/72 · 185/187 · 148/153 | 72/73 · 186/189 · 149/155 |
+| huge | 1 · 276 · 552 | 1089×1677 · 844×1333 | 5.48 / 3.38 MB | 325/353 · 227/235 · 189/198 | 326/354 · 227/236 · 190/199 |
+
+Per-anchor median-of-medians (total): **small 137 ms, typical 149 ms, large
+155 ms, huge 236 ms; pooled median 162 ms**.
+
+### Memory
+
+Fresh-process peak RSS for ONE conversion (numpy-import baseline 26.7 MB):
+**peak 37.1–40.7 MB = +10.4–14.0 MB over baseline** for payloads of
+2.91–7.21 MB (stdout capture + zero-copy view + writable copy ≈ 2× payload).
+At workers=2 the concurrent raster footprint is ≤ ~30 MB — in-memory bytes
+beat temp files trivially (feeds TKT-DJV-05). The only blow-up risk is the
+72-dpi upscale case above, killed by the `min(150, dpi)` cap.
+
+### Re-decode penalty — none
+
+1. **File size does not predict cost**: the largest file (4172, 21.69 MB)
+   renders the fastest pages (72–189 ms); the smallest (4139, 0.34 MB) sits
+   in the same band (122–170 ms). Whole-file decode would scale ~64×.
+2. **No position dependence**: within the 552-page file, p1/p276/p552 =
+   354/236/199 ms — flat-to-decreasing with page index.
+3. **Complexity, not size**: small p12 (3351×4641 → 837×1159) 124 ms vs huge
+   p276 (3376×5332 → 844×1333) 235 ms = 1.9× for 1.15× output pixels — a
+   page-content effect across a 34× file-size gap.
+
+Consistent with the bundled DIRM design: ddjvu seeks each page's chunks via
+the directory index; a spawn pays only the ~53 ms process floor plus that
+page's decode.
+
+### End-to-end estimate (median 209-page book, workers=2)
+
+- render wall = pooled median 162 ms × 209 ÷ 2 ≈ **17 s** (conservative:
+  huge-anchor 236 ms → 25 s; absolute worst, every page like the slowest
+  measured 354 ms → 37 s);
+- OCR wall = 24–40 s/page × 209 ÷ 2 = **2 508–4 180 s (42–70 min)**
+  (dpi=150 default, `ocr.py:174-175`);
+- ratio: render = **0.4–0.7% of OCR wall** (≤1.5% at absolute worst) — noise
+  next to the OCR budget.
+
+**VERDICT: (a) per-page on demand is fine.** At 150 dpi every page renders in
+0.07–0.35 s against a 24–40 s OCR budget; memory is ~14 MB transient per
+page; there is no re-decode penalty to amortize. Chunked (`-eachpage`) or
+whole-file modes would add disk I/O and up-front rendering for pages that may
+never be OCR'd, with no measured benefit. Carry two implementation rules into
+TKT-DJV-05 / TKT-DJV-10: unitless `-scale` only (never the `%` form), and
+`-scale=min(150, stored_dpi)` per page (mixed-DPI files exist; 72-dpi pages
+must not be upscaled).

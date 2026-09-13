@@ -1,6 +1,6 @@
 # pdf-router
 
-Ultra-minimal, deterministic PDF/DOCX → LLM-ready Markdown router.
+Ultra-minimal, deterministic PDF/DOCX/DJVU → LLM-ready Markdown router.
 
 Primary inputs: scientific journals, monographs, project documentation.
 Output: per-page markdown (with optional page markers), RAG-ready JSONL
@@ -16,7 +16,9 @@ uv sync --extra dev           # pytest
 ```
 
 Requires Python ≥ 3.12 and the [pdf-inspector](https://github.com/firecrawl/pdf-inspector)
-native wheel (≥ 1.17).
+native wheel (≥ 1.17). For DJVU input, `djvulibre-bin` must be on `PATH`
+(`djvused`, `djvudump`, `ddjvu` — ADR-0004); PDF/DOCX need no external
+binaries.
 
 ## Quick start
 
@@ -27,13 +29,16 @@ pdf-router path/to/file.pdf
 # Same for a docx — native stdlib parser, no external binaries (ADR-0003)
 pdf-router path/to/том.docx
 
+# And a djvu — djvulibre subprocess adapter (ADR-0004)
+pdf-router path/to/книга.djvu
+
 # Only the markdown output
 pdf-router --render md path/to/file.pdf
 
 # Page markers in markdown
 pdf-router --render md --render-opts '{"page_markers": true}' path/to/file.pdf
 
-# Print metadata only (no rendering): PDFs classify, docx inspects
+# Print metadata only (no rendering): PDFs classify, docx/djvu inspect
 pdf-router --info path/to/file.pdf
 ```
 
@@ -72,11 +77,10 @@ before the first page is processed, so typos never silently change routing
 or burn a pipeline run.
 
 Input format is detected from **magic bytes, not the file extension**.
-Today PDF and DOCX are routable; DJVU is recognized and rejected with
-`UnsupportedFormatError` at the API boundary — before any page work — until
-its adapter lands. A docx renamed to `.pdf` converts as docx; a PDF renamed
-to `.docx` converts as PDF. Adding a format means one registry entry in
-`src/pdf_router/formats.py`; nothing downstream changes.
+Today PDF, DOCX and DJVU are routable. A docx renamed to `.pdf` converts
+as docx; a PDF renamed to `.djvu` converts as PDF. Adding a format means
+one registry entry in `src/pdf_router/formats.py`; nothing downstream
+changes.
 
 DOCX is parsed **natively** (stdlib `zipfile` + ElementTree, ADR-0003):
 `w:pStyle` resolves through `word/styles.xml` to exact heading levels,
@@ -86,6 +90,17 @@ whole document is one pageless IR page (`source_format="docx"`,
 `pdf_type="text_based"`, confidence 1.0 — no OCR pass exists or is
 needed). No external binaries, milliseconds per document; scanned docx
 is out of scope (not present in the corpus).
+
+DJVU is ingested **natively** (djvulibre subprocess adapter, ADR-0004) —
+no intermediate PDF is ever written: pages, hidden text layer and stored
+DPI are read with `djvused`/`djvudump`; page rasters for OCR are rendered
+on demand by `ddjvu` (PPM to stdout, in-memory). A page whose hidden text
+layer yields real text answers without OCR (`src_tool="djvu_text_layer"`);
+layerless pages are OCR'd over the rendered raster. `pdf_type` is always
+`"scanned"` (djvu is a raster-scan format by nature). No sidecar images:
+a djvu page *is* a page-background scan, and those are never exported
+(same rule as scanned PDFs). `pdf_inspector_ocr` stays PDF-only (its
+Rust core cannot open djvu) — route djvu through any other engine.
 
 Output policy belongs to the call, not the config: `convert()` and
 `process_pdf()` write nothing unless you pass `output_dir=`. The
@@ -135,28 +150,32 @@ name — is a `ConfigError` at load, before any page is processed.
 │ docx adapter   │ →     ↑
 │ (stdlib only)  │       │
 └────────────────┘       ↓
+┌────────────────┐
+│ djvu adapter   │ →
+│ (djvulibre)    │
+└────────────────┘
                 ┌────────────┐
-                │ OCR engine │ (PDF only, opt-in, per page)
+                │ OCR engine │ (PDF/DJVU pages, opt-in, per page)
                 └────────────┘
 ```
 
 - **One** `process_pdf` call — the format gate (`formats.route()`) picks
   the inspector (PDF → pdf-inspector adapter; DOCX → the native stdlib
-  adapter).
-- **Zero or more** OCR calls per PDF page, via the single configured
+  adapter; DJVU → the djvulibre subprocess adapter).
+- **Zero or more** OCR calls per PDF/DJVU page, via the single configured
   `[routing].ocr_fallback_engine` (params from its `[ocr.*]` section).
   DOCX is born-digital — no OCR pass exists for it.
 - **One** set of renderers, each reading the same IR.
 
 See `docs/glossary.md` for terms and `docs/adr/` for design decisions.
 
-## IR contract (0.3)
+## IR contract (0.4)
 
 ```python
 {
-  "ir_version": "0.3",
+  "ir_version": "0.4",
   "metadata": {
-    "source_format": "pdf" | "docx",   # IR 0.3 — the container format
+    "source_format": "pdf" | "docx" | "djvu",   # the container format
     "pdf_type": "text_based" | "scanned" | "image_based" | "mixed",
     "page_count": int,
     "pages_with_tables": list[int],   # 1-indexed
@@ -167,7 +186,7 @@ See `docs/glossary.md` for terms and `docs/adr/` for design decisions.
     {
       "page": int,                    # 0-indexed; docx = single page 0
       "markdown": str,                # authoritative for md/chunks renderers
-      "src_tool": "pdf_inspector" | "docx_adapter" | ...,
+      "src_tool": "pdf_inspector" | "docx_adapter" | "djvu_adapter" | "djvu_text_layer" | ...,
       "blocks": [                     # advisory
         {"kind": "HeadingBlock", "level": int, "text": str, "bbox": {...} | null, "source": "structure_tree"|"font_size_fallback"|"docx_style"},
         {"kind": "TableBlock", "markdown": str, "rows": list[list[str]], "header_rows": int, "bbox": ...},
@@ -180,10 +199,16 @@ See `docs/glossary.md` for terms and `docs/adr/` for design decisions.
 ```
 
 `PageResult.markdown` is preserved verbatim from the inspector (PDF:
-pdf-inspector; DOCX: the native adapter); `blocks` is a structural
-decomposition populated when the adapter has upstream data for it. See
-[ADR-0001](docs/adr/0001-ir-structural-blocks.md) and
-[ADR-0003](docs/adr/0003-docx-native-parse.md).
+pdf-inspector; DOCX: the native adapter; DJVU: the hidden text layer or
+empty); `blocks` is a structural decomposition populated when the adapter
+has upstream data for it (djvu: always empty). See
+[ADR-0001](docs/adr/0001-ir-structural-blocks.md),
+[ADR-0003](docs/adr/0003-docx-native-parse.md) and
+[ADR-0004](docs/adr/0004-djvu-ingest.md).
+
+IR 0.4 adds `"djvu"` to `source_format` and two `SrcTool` values
+(`djvu_adapter`, `djvu_text_layer`); loading an 0.4 payload with an older
+reader raises `ValueError` — that is the version bump doing its job.
 
 ## Indexing
 
@@ -195,10 +220,11 @@ decomposition populated when the adapter has upstream data for it. See
 ## Exit codes
 
 - `0` — full success.
-- `1` — usage / IO error (file not found, invalid config, unsupported input format).
+- `1` — usage / IO error (file not found, invalid config, unrecognized input format).
 - `2` — partial success (at least one page failed but pipeline completed);
   every failed page is listed on stderr, outputs are still written.
-- `3` — total failure (pdf-inspector raised on the document itself).
+- `3` — total failure (an adapter raised on the document itself — broken
+  PDF, corrupt djvu, unreadable docx).
 
 ## Project layout
 
@@ -214,6 +240,8 @@ src/pdf_router/
   adapters/
     pdf_inspector.py    # PDF: always-loaded (text path + structural blocks)
     docx.py             # DOCX: native stdlib parser (ADR-0003)
+    djvu.py             # DJVU: djvulibre subprocess adapter (ADR-0004)
+  rasterize.py          # format-aware page raster seam (pymupdf | ddjvu)
   ocr.py                # flat OCR engines: rapidocr/pdf_inspector_ocr/tesseract/glm/deepseek
   renderers/
     md.py, chunks.py, json_renderer.py
@@ -221,6 +249,7 @@ tests/
   test_ir.py                    # IR round-trip
   test_ir_structural_blocks.py  # IR 0.2 block anchors (p5 + ТКР1)
   test_docx.py                  # docx: synthetic control + golden volumes
+  test_djvu.py                  # djvu: fixtures, seam, layer policy, corpus slow tier
   test_p5.py, test_p27.py, test_big_test.py   # golden anchors
   test_api.py                   # public-surface contract + import-cost guard
   test_renderers.py, test_conventions.py, ...
@@ -228,6 +257,7 @@ docs/
   glossary.md           # terms
   adr/0001-ir-structural-blocks.md
   adr/0003-docx-native-parse.md
+  adr/0004-djvu-ingest.md
 ```
 
 ## License

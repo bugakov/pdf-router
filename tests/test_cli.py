@@ -98,18 +98,35 @@ def test_unknown_renderer_returns_1(p5_pdf, tmp_path, monkeypatch, capsys) -> No
     assert cli.main(["--render", "md,wat", str(p5_pdf)]) == 1
 
 
-def test_unsupported_format_returns_1(
+def test_unrecognized_format_returns_1(
     tmp_path, monkeypatch, capsys
 ) -> None:
-    """A recognized-but-unroutable format (djvu today; docx was here before
-    ADR-0003 made it routable) is a usage error (exit 1), not a document
-    failure (exit 3): nothing was processed, the message names the format."""
+    """Unrecognized content is a usage error (exit 1), not a document
+    failure (exit 3): nothing was processed, the message names the file.
+
+    (djvu was the old subject here; ADR-0004 made it routable — a
+    djvu-magic file with a corrupt body is now exit 3, see
+    test_corrupt_djvu_is_document_failure.)
+    """
+    monkeypatch.chdir(tmp_path)
+    junk = tmp_path / "scan.dat"
+    junk.write_bytes(b"\x00\x01\x02\x03not a document")
+    code = cli.main([str(junk)])
+    assert code == 1
+    assert "unrecognized" in capsys.readouterr().err
+
+
+def test_corrupt_djvu_is_document_failure(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """DJVU magic but a truncated body: the format is routable, the
+    document is broken — document failure (exit 3), not usage error."""
     monkeypatch.chdir(tmp_path)
     djvu = tmp_path / "scan.djvu"
     djvu.write_bytes(b"AT&TFORM\x00\x00\x00\x14DJVMDJVM")
     code = cli.main([str(djvu)])
-    assert code == 1
-    assert "DJVU" in capsys.readouterr().err
+    assert code == 3
+    assert "error" in capsys.readouterr().err
 
 
 def test_info_on_docx_through_one_door(
@@ -126,10 +143,25 @@ def test_info_on_docx_through_one_door(
     assert data["confidence"] == 1.0
 
 
-def test_info_on_djvu_returns_1(tmp_path, monkeypatch, capsys) -> None:
-    """--info refuses recognized-but-unroutable formats with a typed error."""
+def test_info_on_djvu_through_one_door(
+    plain_djvu, tmp_path, monkeypatch, capsys
+) -> None:
+    """TKT-DX-06 extended to djvu (ADR-0004): --info answers from the
+    native adapter's metadata summary — same parser, no drift."""
+    monkeypatch.chdir(tmp_path)
+    code = cli.main(["--info", str(plain_djvu)])
+    assert code == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["source_format"] == "djvu"
+    assert data["page_count"] == 2
+    assert data["pdf_type"] == "scanned"
+
+
+def test_info_on_corrupt_djvu_returns_3(tmp_path, monkeypatch, capsys) -> None:
+    """--info on a corrupt djvu is a document failure (exit 3), not a
+    traceback — same table as the render path."""
     monkeypatch.chdir(tmp_path)
     djvu = tmp_path / "scan.djvu"
     djvu.write_bytes(b"AT&TFORM\x00\x00\x00\x14DJVMDJVM")
-    assert cli.main(["--info", str(djvu)]) == 1
-    assert "DJVU" in capsys.readouterr().err
+    assert cli.main(["--info", str(djvu)]) == 3
+    assert "error" in capsys.readouterr().err

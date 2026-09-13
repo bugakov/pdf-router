@@ -17,4 +17,10 @@ TKT-DJV-08.
 
 ## Resolution
 
-_(open)_
+**Resolved (task, 2026-09-13).** `docs/adr/0004-djvu-ingest.md` written,
+mirroring ADR-0003's structure: context (scan-native format, PDF-shaped
+downstream, corpus facts), decision (strategy C + all locked
+sub-decisions 1–10 from TKT-DJV-02..08/11/12), alternatives with rejection
+reasons (A, B, python-djvulibre, re-OCR, page-strip export), consequences
+(incl. the djvulibre-bin ruling and the IR 0.3→0.4 bump), implementation
+checklist, references.

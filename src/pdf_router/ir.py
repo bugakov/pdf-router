@@ -20,6 +20,15 @@ IR 0.3 (ADR-0003, format-neutral contract): ``Metadata.source_format`` names
 the originating format ("pdf" | "docx"); ``SrcTool.DOCX_ADAPTER`` tags docx
 provenance. Renderers stay format-agnostic — they consume IR, never the
 source format.
+
+IR 0.4 (ADR-0004, djvu): ``source_format`` gains "djvu";
+``SrcTool.DJVU_TEXT_LAYER`` tags pages whose markdown came from the djvu
+hidden text layer (not from our OCR); ``SrcTool.DJVU_ADAPTER`` tags
+layerless pages the adapter produced empty (OCR overwrites both when it
+runs). Loading an IR 0.4 payload with an
+older reader raises ``ValueError`` on those enum values — the version bump
+makes the contract change visible instead of silently corrupting
+provenance.
 """
 
 from __future__ import annotations
@@ -28,7 +37,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
 
-IR_VERSION = "0.3"
+IR_VERSION = "0.4"
 
 
 class SrcTool(str, Enum):
@@ -41,6 +50,8 @@ class SrcTool(str, Enum):
     GLM_OCR = "glm_ocr"
     DEEPSEEK_OCR = "deepseek_ocr"
     DOCX_ADAPTER = "docx_adapter"
+    DJVU_ADAPTER = "djvu_adapter"
+    DJVU_TEXT_LAYER = "djvu_text_layer"
 
 
 @dataclass
@@ -60,6 +71,9 @@ class Metadata:
     Which container the text came from is ``source_format`` (IR 0.3):
     "pdf" | "docx". A docx page is born-digital, so adapters report
     ``pdf_type="text_based"`` with ``confidence=1.0`` — no OCR happened.
+    A djvu page is a raster scan by nature (ADR-0004): adapters report
+    ``pdf_type="scanned"`` with ``confidence=1.0``; per-page ``src_tool``
+    carries where the text actually came from (layer vs OCR engine).
     """
 
     pdf_type: str = "unknown"  # text_based | scanned | image_based | mixed
@@ -73,7 +87,7 @@ class Metadata:
     pages_with_columns: list[int] = field(default_factory=list)  # 1-indexed
     pages_needing_ocr: list[int] = field(default_factory=list)  # 1-indexed
     ocr_reasons_by_page: list[OcrReasonEntry] = field(default_factory=list)
-    source_format: str = "pdf"  # IR 0.3: "pdf" | "docx"
+    source_format: str = "pdf"  # IR 0.3: "pdf" | "docx"; IR 0.4 adds "djvu"
 
 
 # --- Structural blocks (IR 0.2) ----------------------------------------------

@@ -12,9 +12,16 @@ Engines supported:
   Cyrillic head at all, and eslav has no server ONNX — both verified).
 - ``pdf_inspector_ocr`` — PP-OCRv6 Small via pdf-inspector Rust + ONNX.
   Cannot do Cyrillic (dictionary has zero Cyrillic tokens).
+  PDF-only by nature (Rust pdfium core) — refuses djvu input (ADR-0004).
 - ``tesseract`` — local CLI, no API key required.
 - ``glm_ocr`` — Z.ai layout_parsing API, requires api_key.
 - ``deepseek_ocr`` — Novita AI deepseek-ocr-2, requires api_key.
+
+All engines acquire page rasters through :mod:`pdf_router.rasterize`
+(the format-aware seam, ADR-0004): pdf -> pymupdf, djvu -> ddjvu. Engine
+signatures keep ``(path, page_idx)``; the format dispatch lives below
+them. Only ``pdf_inspector_ocr`` is exempt — its Rust core opens PDFs
+itself, so djvu is a typed refusal there.
 """
 
 from __future__ import annotations
@@ -25,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from pdf_router.config import RouterConfig
-from pdf_router.rasterize import rasterize_page
+from pdf_router.rasterize import page_raster_array, page_single_pdf, rasterize_page
 
 logger = logging.getLogger("pdf_router")
 
@@ -165,8 +172,9 @@ def _rapidocr_get_engine(config: RouterConfig):
 def _ocr_rapidocr(pdf_path: str, page_idx: int, config: RouterConfig) -> str:
     """OCR via RapidOCR (RapidAI) on onnxruntime.
 
-    Renders the page with pymupdf and feeds the numpy RGB array to the
-    engine. Result boxes are already y-sorted; v1 reading order is a plain
+    Renders the page through the raster seam (pymupdf for pdf, ddjvu for
+    djvu) and feeds the numpy RGB array to the engine. Result boxes are
+    already y-sorted; v1 reading order is a plain
     join of lines (column interleaving on drawings is acceptable — see
     wayfinder map).
 
@@ -180,7 +188,6 @@ def _ocr_rapidocr(pdf_path: str, page_idx: int, config: RouterConfig) -> str:
     (not from this function's params).
     """
     import numpy as np
-    import pymupdf
 
     params = _lookup_params(config, "rapidocr")
     dpi = int(params.get("dpi", 150))
@@ -190,19 +197,10 @@ def _ocr_rapidocr(pdf_path: str, page_idx: int, config: RouterConfig) -> str:
     except Exception as exc:
         raise OcrError(f"rapidocr engine init failed: {exc}") from exc
 
-    doc = pymupdf.open(pdf_path)
     try:
-        if not 0 <= page_idx < doc.page_count:
-            raise OcrError(f"page index {page_idx} out of range")
-        page = doc[page_idx]
-        pix = page.get_pixmap(dpi=dpi, alpha=False)
-        img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
-            pix.height, pix.width, pix.n
-        )
-        if pix.n == 4:
-            img = img[:, :, :3]
-    finally:
-        doc.close()
+        img = page_raster_array(pdf_path, page_idx, dpi=dpi)
+    except Exception as exc:
+        raise OcrError(f"page render failed: {exc}") from exc
 
     try:
         result = engine(img)
@@ -257,6 +255,21 @@ def _ocr_pdf_inspector(pdf_path: str, page_idx: int, params: dict[str, Any]) -> 
     """
     import os
 
+    from pdf_router.rasterize import RasterizeError, _kind
+
+    # Typed refusal first, not a crash: the Rust core opens PDFs only
+    # (ADR-0004). A format mismatch is a routing bug — it must surface
+    # regardless of deployment state, and this keeps the refusal testable
+    # without env wiring.
+    try:
+        if _kind(pdf_path) != "pdf":
+            raise OcrError(
+                "pdf_inspector_ocr is PDF-only; route djvu pages through "
+                "another engine (rapidocr/tesseract/glm_ocr/deepseek_ocr)"
+            )
+    except RasterizeError as exc:
+        raise OcrError(str(exc)) from exc
+
     pdfium_lib = os.environ.get("PDFIUM_LIB_PATH")
     ort_dylib = os.environ.get("ORT_DYLIB_PATH")
     if not (pdfium_lib and ort_dylib):
@@ -296,7 +309,7 @@ def _ocr_pdf_inspector(pdf_path: str, page_idx: int, params: dict[str, Any]) -> 
 def _ocr_tesseract(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
     """OCR via tesseract CLI subprocess.
 
-    Renders page to PNG via ``rasterize_page`` (shared helper, 200 DPI).
+    Renders page to PNG via ``rasterize_page`` (format-aware seam, 200 DPI).
     Requires ``tesseract`` binary; ``languages`` defaults to ``eng``.
     """
     import shutil
@@ -330,7 +343,8 @@ def _ocr_tesseract(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
 def _ocr_glm(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
     """OCR via Z.ai GLM layout_parsing API.
 
-    Renders page to a single-page PDF (PyMuPDF insert_pdf) and POSTs it as
+    Renders the page to a single-page PDF (verbatim page extract for pdf,
+    raster-wrapped page for djvu — the raster seam) and POSTs it as
     base64 data-URL. Returns markdown from ``md_results``.
     Requires ``api_key`` in params; ``base_url`` defaults to Z.ai endpoint.
 
@@ -354,25 +368,15 @@ def _ocr_glm(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
         raise OcrError("glm_ocr requires api_key")
 
     try:
-        import pymupdf
-    except Exception as exc:
-        raise OcrError(f"pymupdf not importable: {exc}") from exc
-
-    try:
         import requests
     except Exception as exc:
         raise OcrError(f"requests not importable (install [cloud] extra): {exc}") from exc
 
-    # Build single-page PDF.
-    src = pymupdf.open(pdf_path)
+    # Build single-page PDF via the raster seam (pdf verbatim, djvu wrapped).
     try:
-        if not (0 <= page_idx < src.page_count):
-            raise OcrError(f"page index {page_idx} out of range")
-        single = pymupdf.open()
-        single.insert_pdf(src, from_page=page_idx, to_page=page_idx)
-        pdf_bytes = single.tobytes()
-    finally:
-        src.close()
+        pdf_bytes = page_single_pdf(pdf_path, page_idx)
+    except Exception as exc:
+        raise OcrError(f"page render failed: {exc}") from exc
 
     data_url = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode("ascii")
 
@@ -399,8 +403,9 @@ def _ocr_glm(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
 def _ocr_deepseek(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
     """OCR via Novita AI deepseek-ocr-2.
 
-    Renders page to PNG (200 DPI), uploads to uguu.se, POSTs to
-    OpenAI-compatible /chat/completions endpoint. Requires ``api_key`` in params.
+    Renders page to PNG (200 DPI, format-aware seam), uploads to uguu.se,
+    POSTs to OpenAI-compatible /chat/completions endpoint. Requires
+    ``api_key`` in params.
 
     Empirical notes (live-tested 2026-08-26, from the retired adapter):
     - catbox.moe blocks this host class with 412 "Invalid uploader" (IP-wide,

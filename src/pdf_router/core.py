@@ -1,20 +1,26 @@
-"""v0.3 routing pipeline — flat functions, no adapter classes.
+"""v0.4 routing pipeline — flat functions, no adapter classes.
 
-Design (TKT-RT-01, extended by ADR-0003):
+Design (TKT-RT-01, extended by ADR-0003 and ADR-0004):
 1. route(pdf_path) — the format dispatcher picks the adapter (PDF →
-   pdf-inspector; DOCX → the native stdlib inspector; djvu is recognized
-   but raises UnsupportedFormatError until its adapter lands).
+   pdf-inspector; DOCX → the native stdlib inspector; DJVU → the native
+   djvulibre subprocess inspector, ADR-0004).
 2. For each page, in parallel (ThreadPoolExecutor):
    - extract_images_for_page: raster + vector images (PDF) or media parts
-     (docx), independent of text.
-   - process_text_for_page (PDF only): looks_like_text per-page; OCR
-     fallback all pages if needed. DOCX is born-digital — its text is
-     authoritative, there is no OCR pass to fall back to (ADR-0003), so
-     the text pass is skipped entirely.
-3. Return IR 0.3 with page.images populated.
+     (docx), independent of text. djvu: no image pass at all — a djvu page
+     IS a page-background scan, which the PDF image pass filters out
+     anyway (ADR-0004, TKT-DJV-06).
+   - process_text_for_page (PDF and DJVU): looks_like_text per-page; OCR
+     fallback for pages that need it. For djvu, the inspector already
+     knows needs_ocr per page (hidden text layer), and page rasters are
+     rendered on demand through the raster seam (ddjvu). DOCX is
+     born-digital — its text is authoritative, there is no OCR pass to
+     fall back to (ADR-0003), so the text pass is skipped entirely.
+3. Return IR with page.images populated (djvu pages always []).
 
 Key decisions:
-- page.needs_ocr from pdf-inspector bypasses our looks_like_text (TKT-RT-03).
+- page.needs_ocr from an inspector bypasses our looks_like_text (TKT-RT-03);
+  a djvu text-layer page that fails the quality gate still falls back to
+  OCR via low_text_quality (TKT-DJV-03).
 - looks_like_text is per-page, not per-block (TKT-RT-02).
 - OCR is per-page, one raster + one OCR call per page (TKT-RT-10).
 - OCR engine is one, configured via routing.ocr_fallback_engine (TKT-RT-06).
@@ -22,8 +28,9 @@ Key decisions:
   through pdf_router.formats (the dispatcher owns format -> adapter).
 - Sidecar image extraction is dispatched on Metadata.source_format (IR 0.3):
   PDF → extract_images.extract_page_images, DOCX → the docx adapter's
-  extract_docx_images. This is pipeline machinery, not a second registry —
-  the inspector registry (formats.py) stays path -> IR only.
+  extract_docx_images, DJVU → none (images stay []). This is pipeline
+  machinery, not a second registry — the inspector registry (formats.py)
+  stays path -> IR only.
 """
 
 from __future__ import annotations
@@ -80,17 +87,21 @@ def process_pdf(
     pdf_path = os.fspath(pdf_path)
     t0 = time.perf_counter()
     # The format gate: magic bytes decide, not the extension. Raises
-    # UnsupportedFormatError before any page work for content no inspector
-    # claims (djvu today, unrecognized bytes).
+    # UnsupportedFormatError before any page work for unrecognized content.
     inspector = route(pdf_path)
     doc = inspector(pdf_path)
     report = ProcessingReport(pages_total=len(doc.pages))
 
-    # Format-aware passes (IR 0.3, ADR-0003): the OCR/text-quality pass and
-    # the pymupdf image extractor are PDF machinery. A docx page is
-    # born-digital — its text is authoritative, its images are package
-    # media parts, and neither pass has anything to add.
-    is_pdf = doc.metadata.source_format == "pdf"
+    # Format-aware passes (IR 0.3/0.4, ADR-0003/0004):
+    # - text pass: pdf (quality gate + OCR fallback) and djvu (the
+    #   inspector marked needs_ocr per page; a junky hidden-text layer
+    #   still falls back via low_text_quality). docx is born-digital —
+    #   no OCR pass to fall back to.
+    # - image pass: pdf → pymupdf extractor, docx → media parts, djvu →
+    #   none (a djvu page is itself the page-background scan; exporting
+    #   it as a sidecar image would duplicate the OCR raster).
+    source_format = doc.metadata.source_format
+    run_text_pass = source_format in ("pdf", "djvu")
 
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -105,7 +116,7 @@ def process_pdf(
             # directory; otherwise the pass is skipped entirely (pure run).
             img_fut = None
             if output_dir is not None:
-                if is_pdf:
+                if source_format == "pdf":
                     img_fut = pool.submit(
                         extract_page_images,
                         page,
@@ -114,15 +125,16 @@ def process_pdf(
                         raster=routing_cfg.extract_raster_photos,
                         vector=routing_cfg.extract_vector_diagrams,
                     )
-                else:
+                elif source_format == "docx":
                     from pdf_router.adapters.docx import extract_docx_images
 
                     img_fut = pool.submit(
                         extract_docx_images, page, pdf_path, output_dir
                     )
+                # djvu: img_fut stays None — page.images = [] (TKT-DJV-06).
             txt_fut = (
                 pool.submit(_process_text_for_page, page, pdf_path, config)
-                if is_pdf
+                if run_text_pass
                 else None
             )
             futures.append((page, img_fut, txt_fut))
@@ -142,7 +154,7 @@ def process_pdf(
             # Text processing mutates page.markdown / src_tool / error.
             # Any unexpected (non-OcrError) exception is recorded on the page:
             # page.error is None *only* when the page really succeeded.
-            # (docx pages skip the pass entirely — see is_pdf above.)
+            # (docx pages skip the pass entirely — see run_text_pass above.)
             if txt_fut is not None:
                 try:
                     txt_fut.result()
@@ -182,12 +194,15 @@ def process_pdf(
 def _process_text_for_page(page, pdf_path: str, config: RouterConfig) -> None:
     """Mutates page in-place: markdown, src_tool, error.
 
-    Logic (TKT-RT-01):
-    1. If pdf-inspector already said needs_ocr → skip looks_like_text.
+    Logic (TKT-RT-01, extended by TKT-DJV-03/04):
+    1. If the inspector already said needs_ocr → skip looks_like_text
+       (djvu layerless pages land here, reason inspector_needs_ocr).
     2. Compute page_text from blocks + markdown.
     3. Run looks_like_text(page_text, language, threshold).
-    4. If ok → return (native text).
-    5. Otherwise: rasterize page once + run OCR via ocr_page().
+    4. If ok → return (native text — pdf text or a good djvu text layer).
+    5. Otherwise: rasterize page once (format-aware seam) + run OCR via
+       ocr_page(). A junky djvu text layer falls back here with reason
+       low_text_quality — the layer is not trusted over real OCR.
     """
     needs_ocr_from_inspector = page.needs_ocr
 

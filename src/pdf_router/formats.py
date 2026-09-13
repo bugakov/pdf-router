@@ -12,16 +12,17 @@ halves:
 - :func:`route` composes both: the single gate every entry point funnels
   through, raising :class:`UnsupportedFormatError` *before any page work*.
 
-Supported today: PDF (via the pdf-inspector adapter) and DOCX (via the
-native stdlib adapter, ADR-0003). Recognized but not
-yet routable: DJVU — the registry simply has no entry yet, and the
-error says so, so callers branch on a typed exception instead of parsing
-strings. Adding a format = one enum member + one magic-byte branch + one
-registry entry; nothing downstream changes.
+Supported today: PDF (via the pdf-inspector adapter), DOCX (via the
+native stdlib adapter, ADR-0003) and DJVU (via the native djvulibre
+subprocess adapter, ADR-0004). Unrecognized content raises
+:class:`UnsupportedFormatError` before any page work, so callers branch
+on a typed exception instead of parsing strings. Adding a format = one
+enum member + one magic-byte branch + one registry entry; nothing
+downstream changes.
 
 NB: the *sidecar image extraction* and OCR passes in core.py are still
-format-aware (pymupdf pages vs docx media parts); the dispatch on
-``Metadata.source_format`` lives there, not here.
+format-aware (pymupdf pages vs docx media parts vs djvu no-op); the
+dispatch on ``Metadata.source_format`` lives there, not here.
 """
 
 from __future__ import annotations
@@ -54,7 +55,6 @@ class Format(enum.Enum):
     DOCX = "docx"
     DJVU = "djvu"
 
-
 #: The inspector contract: one callable per format — document path in,
 #: fully-populated ``IR`` out. The pdf-inspector adapter's module-level
 #: ``extract_ir`` conforms; a docx inspector plugs in the same way.
@@ -78,11 +78,19 @@ def _docx_inspector(path: str) -> IR:
     return extract_ir(path)
 
 
+def _djvu_inspector(path: str) -> IR:
+    # djvulibre subprocess adapter (ADR-0004) — lazy like the others.
+    from pdf_router.adapters.djvu import extract_ir
+
+    return extract_ir(path)
+
+
 #: Format -> inspector registry. The dispatcher's single source of truth:
 #: core.py never imports an adapter directly.
 _INSPECTORS: dict[Format, Inspector] = {
     Format.PDF: _pdf_inspector,
     Format.DOCX: _docx_inspector,
+    Format.DJVU: _djvu_inspector,
 }
 
 # ZIP local/empty/spanned headers — any of them means "some zip package".
@@ -139,7 +147,7 @@ def get_inspector(fmt: Format) -> Inspector:
 
     Raises:
         UnsupportedFormatError: the format is recognized but has no
-            inspector yet (DJVU) — with a forward-looking message.
+            inspector yet — with a forward-looking message.
     """
     try:
         return _INSPECTORS[fmt]

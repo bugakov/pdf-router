@@ -19,4 +19,23 @@ Blocked by: TKT-DJV-01 (the shortlist), TKT-DJV-02 (what "e2e" even runs).
 
 ## Resolution
 
-_(open)_
+**Resolved (grilling, 2026-09-13).** Confirmed:
+
+1. **Anchors — 4 of the 5 shortlisted** (research §5):
+   - small `4139_from_s3.djvu` (25 pp, no layer) — fast smoke;
+   - typical `._._2_32e52013.djvu` (corpus median);
+   - text `._._-__d2c86e35.djvu` (richest layer) — the text-path golden
+     anchor;
+   - largest `4172_from_s3.djvu` (247 pp) — stress.
+   The fifth (209 pp + layer) is spare — redundant in role.
+2. **Fast tier**: tiny committed djvu fixtures (2–3 pp, built once via
+   c44/djvm; one with a text layer via djvused) + stubbed OCR
+   (monkeypatch). Covers gates, counters, the raster seam, purity
+   (`output_dir=None`), and the lying-extension family (PDF named
+   `.djvu`, djvu named `.pdf` — magic bytes decide).
+3. **Slow tier (`-m slow`)**: real OCR on the small anchor —
+   determinism (two runs → identical markdown); text anchor — layer
+   pages → `DJVU_TEXT_LAYER`, no OCR runs on them.
+4. **Invariants in both tiers**: `page.error` honesty (failed counter ==
+   pages carrying an error), purity (no `output_dir` → `images=[]`,
+   zero disk writes).

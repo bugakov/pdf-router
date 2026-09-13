@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 PDF_DIR = Path("/home/scanum/parser_choose/pdf")
+FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
 
 def _pdf(name: str) -> Path:
@@ -71,3 +72,24 @@ def docx_path(tmp_path: Path) -> Path:
     p = tmp_path / "doc.docx"
     p.write_bytes(buf.getvalue())
     return p
+
+
+def _djvu_fixture(name: str) -> Path:
+    """Committed tiny djvu (2 pages, 200x300 @300 dpi, built once with
+    c44+djvm — see docs/wayfinder/tickets/TKT-DJV-08)."""
+    p = FIXTURE_DIR / "djvu" / name
+    if not p.exists():
+        pytest.skip(f"djvu fixture not available: {p}")
+    return p
+
+
+@pytest.fixture()
+def plain_djvu() -> Path:
+    """2 pages, NO hidden text layer — the layerless OCR path."""
+    return _djvu_fixture("plain.djvu")
+
+
+@pytest.fixture()
+def text_layer_djvu() -> Path:
+    """2 pages, page 1 carries a hidden text layer ("Hello")."""
+    return _djvu_fixture("text_layer.djvu")

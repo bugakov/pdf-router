@@ -90,6 +90,10 @@ def process_pdf(
     # UnsupportedFormatError before any page work for unrecognized content.
     inspector = route(pdf_path)
     doc = inspector(pdf_path)
+    # IR 0.5.1 (ADR-0006): the single fill point for source_path. The
+    # renderer layer derives doc_id/doc_title from it; adapters stay
+    # path-agnostic. asdict() carries it into to_dict automatically.
+    doc.metadata.source_path = pdf_path
     report = ProcessingReport(pages_total=len(doc.pages))
 
     # Format-aware passes (IR 0.3/0.4, ADR-0003/0004):

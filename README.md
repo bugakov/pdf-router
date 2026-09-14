@@ -179,6 +179,7 @@ See `docs/glossary.md` for terms and `docs/adr/` for design decisions.
   "ir_version": "0.5",
   "metadata": {
     "source_format": "pdf" | "docx" | "djvu",   # the container format
+    "source_path": str | null,      # the input path (filled by core, 0.5.1)
     "pdf_type": "text_based" | "scanned" | "image_based" | "mixed",
     "page_count": int,
     "pages_with_tables": list[int],   # 1-indexed
@@ -222,6 +223,46 @@ five OCR values, and scanned pages get real blocks
 an older reader raises `ValueError` — that is the version bump doing its
 job.
 
+## RAG chunks (envelope v2)
+
+The chunks renderer emits hybrid chunks ([ADR-0006](docs/adr/0006-rag-chunks.md)):
+one JSONL schema for all chunks, discriminated by `type`:
+
+```json
+{
+  "chunk_id": "13-t1", "chunk_version": 2,
+  "type": "table | table_part | text",
+  "embed": "...",       # the vectorization text -- embed it as-is
+  "markdown": "...",    # the generation text (context + pipe grid + summary)
+  "metadata": {"doc_id": "...", "doc_title": "...", "source_format": "pdf",
+                "page": 13, "section": "...", "src_tool": "rapidocr",
+                "error": null,
+                "table": {"table_id": "13-t1", "part": 1, "parts": 1,
+                           "n_rows": 41, "n_cols": 6, "header": [...],
+                           "source": "ocr_table_lineless"}},
+  "images": []
+}
+```
+
+- **Tables** (from `TableBlock`): key-value linear embed text
+  (`"Ключ: значение, ..."` per row) + context (doc title, walk-back
+  heading, caption) + a deterministic facts summary (min/max/sum per
+  numeric column). The pipe grid rides in `markdown`, never in `embed`.
+  Whole table = one chunk while it fits `max_tokens`; over budget it
+  splits by rows with the header band duplicated in every part
+  (`part`/`parts` in metadata).
+- **Text** (from `page.markdown`): pipe-table regions covered by a
+  `TableBlock` are subtracted (exact match on native pages, any pipe
+  region on OCR pages); uncovered tables stay in the text — honest
+  degradation. Optional `embed_context` preamble (`doc title › heading`)
+  counts against the token budget.
+- **Identity**: `doc_id` = 12-hex SHA-256 of `Metadata.source_path` —
+  the same id as the sidecar images folder.
+
+TOML: `[renderers.chunks] max_tokens, overlap_tokens, summary =
+"facts"|"none", embed_context` (see `router.toml.example`). Same IR in,
+byte-identical JSONL out.
+
 ## Indexing
 
 - **1-indexed** (matches pdf-inspector): `metadata.pages_with_*`,
@@ -257,15 +298,16 @@ src/pdf_router/
   ocr.py                # flat OCR engines: rapidocr/pdf_inspector_ocr/tesseract/glm/deepseek
   structure.py          # post-OCR structure pass: tables (lineless/wired) + headings (ADR-0005)
   renderers/
-    md.py, chunks.py, json_renderer.py
+    md.py, chunks.py (RAG envelope v2, ADR-0006), json_renderer.py
 tests/
-  test_ir.py                    # IR round-trip
+  test_ir.py                    # IR round-trip (incl. source_path)
   test_ir_structural_blocks.py  # IR 0.2 block anchors (p5 + ТКР1)
   test_docx.py                  # docx: synthetic control + golden volumes
   test_djvu.py                  # djvu: fixtures, seam, layer policy, corpus slow tier
   test_p5.py, test_p27.py, test_big_test.py   # golden anchors
   test_api.py                   # public-surface contract + import-cost guard
   test_renderers.py, test_conventions.py, ...
+  test_chunks_rag.py            # chunks quality bar: fast/middle/slow tiers (ADR-0006)
 docs/
   glossary.md           # terms
   adr/0001-ir-structural-blocks.md

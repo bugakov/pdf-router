@@ -14,6 +14,8 @@ def test_no_file_gives_defaults(tmp_path) -> None:
     assert cfg.renderers.enabled == {"md", "chunks", "json"}
     assert cfg.renderers.chunks.max_tokens == 512
     assert cfg.renderers.chunks.overlap_tokens == 64
+    assert cfg.renderers.chunks.summary == "facts"
+    assert cfg.renderers.chunks.embed_context is True
 
 
 def test_none_gives_defaults() -> None:
@@ -43,6 +45,8 @@ page_markers = true
 [renderers.chunks]
 max_tokens = 256
 overlap_tokens = 32
+summary = "none"
+embed_context = false
 
 [renderers.json]
 include_page_bbox = true
@@ -61,7 +65,18 @@ include_page_bbox = true
     assert cfg.renderers.page_markers is True
     assert cfg.renderers.chunks.max_tokens == 256
     assert cfg.renderers.chunks.overlap_tokens == 32
+    assert cfg.renderers.chunks.summary == "none"
+    assert cfg.renderers.chunks.embed_context is False
     assert cfg.renderers.json_include_page_bbox is True
+
+
+def test_chunks_summary_glm_reserved_rejected(tmp_path) -> None:
+    """``summary = "glm"`` is the reserved opt-in seam (map v0.7): named
+    in the error, rejected at load until implemented (TKT-RC-01)."""
+    toml = tmp_path / "router.toml"
+    toml.write_text('[renderers.chunks]\nsummary = "glm"\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="glm"):
+        RouterConfig.from_toml(toml)
 
 
 def test_unknown_log_level_raises(tmp_path) -> None:

@@ -122,7 +122,7 @@ def test_cli_chunks_propagate_images(cli_run) -> None:
         if ln.strip()
     ]
     assert chunks, "chunks.jsonl is empty"
-    pages_with_imgs = {c["page"] for c in chunks if c.get("images")}
+    pages_with_imgs = {c["metadata"]["page"] for c in chunks if c.get("images")}
     assert len(pages_with_imgs) >= 2, (
         f"expected chunks for >= 2 pages with images, got {len(pages_with_imgs)}: "
         f"{sorted(pages_with_imgs)}"

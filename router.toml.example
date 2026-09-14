@@ -81,6 +81,11 @@ log_level = "info"          # debug | info | warning | error; default "warning"
 [renderers.chunks]
 # max_tokens = 512      # default
 # overlap_tokens = 64   # default
+# summary = "facts"     # table summary engine: "facts" (deterministic stats
+#                       # from the grid) | "none"; "glm" is reserved (opt-in
+#                       # cloud) but not implemented yet — rejected at load
+# embed_context = true  # context preamble (doc title + headings) inside the
+#                       # chunk's embed text
 [renderers.json]
 # include_page_bbox = false  # default; opt-in
 

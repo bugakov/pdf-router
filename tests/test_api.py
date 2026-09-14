@@ -384,7 +384,7 @@ def test_renderers_accept_router_config() -> None:
     assert "Hello" in render_markdown(ir, config=cfg)
     assert render_json(ir, config=cfg).strip().startswith("{")
     chunk_line = render_chunks(ir, config=cfg).splitlines()[0]
-    assert '"page": 0' in chunk_line
+    assert '"page": 0' in chunk_line  # metadata.page survives coercion (envelope v2)
 
 
 def test_renderers_accept_none_config() -> None:

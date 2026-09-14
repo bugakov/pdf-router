@@ -19,6 +19,7 @@ def make_ir() -> IR:
             pages_with_columns=[1, 2],
             pages_needing_ocr=[2],
             ocr_reasons_by_page=[OcrReasonEntry(page=2, reasons=["low_text_density"])],
+            source_path="/data/in/Отчёт.pdf",
         ),
         pages=[
             PageResult(page=0, markdown="# Title\n\ntext", src_tool=SrcTool.PDF_INSPECTOR),
@@ -71,6 +72,46 @@ def test_to_dict_is_json_serializable() -> None:
     import json
 
     json.dumps(to_dict(make_ir()), ensure_ascii=False)
+
+
+# --- IR 0.5.1: Metadata.source_path (additive, ADR-0006) ----------------------
+
+
+def test_source_path_defaults_to_none() -> None:
+    """Hand-built IRs and old payloads have no path — the field is optional."""
+    assert Metadata().source_path is None
+    d = to_dict(IR())
+    assert d["metadata"]["source_path"] is None
+
+
+def test_source_path_round_trip() -> None:
+    ir = make_ir()
+    assert ir.metadata.source_path == "/data/in/Отчёт.pdf"
+    ir2 = from_dict(to_dict(ir))
+    assert ir2 == ir
+
+
+def test_old_payload_without_source_path_loads() -> None:
+    """No version bump: a dict serialized before 0.5.1 must keep loading."""
+    d = to_dict(make_ir())
+    del d["metadata"]["source_path"]
+    ir = from_dict(d)
+    assert ir.metadata.source_path is None
+    # everything else survived
+    assert ir.metadata.title == "Sample"
+    assert len(ir.pages) == 2
+
+
+def test_doc_id_stable_and_matches_sidecar_schema() -> None:
+    """doc_id = 12-hex SHA-256 of the resolved path — the same function the
+    sidecar image paths use (TKT-RT-12), so one id spans all artifacts."""
+    from pdf_router.extract_images import doc_id_from_path
+
+    did = doc_id_from_path("/data/in/Отчёт.pdf")
+    assert len(did) == 12
+    int(did, 16)  # hex
+    assert did == doc_id_from_path("/data/in/sub/../Отчёт.pdf")  # resolve-normalized
+    assert did != doc_id_from_path("/data/in/Отчет.pdf")  # different file → different id
 
 
 @pytest.mark.slow

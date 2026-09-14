@@ -19,7 +19,7 @@ def test_p5_e2e_cli(p5_pdf, tmp_path, monkeypatch) -> None:
     assert chunks_lines
     for ln in chunks_lines:
         chunk = json.loads(ln)
-        assert {"chunk_id", "text", "page", "section", "src_tool"} <= set(chunk)
+        assert {"chunk_id", "chunk_version", "type", "embed", "markdown", "metadata"} <= set(chunk)
 
     ir_d = json.loads((out_dir / "p5.ir.json").read_text(encoding="utf-8"))
     assert ir_d["metadata"]["pdf_type"] == "text_based"

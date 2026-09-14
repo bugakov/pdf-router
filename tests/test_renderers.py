@@ -1,11 +1,16 @@
-"""Ticket 09: renderers — pure functions over a fixed IR."""
+"""Ticket 09: renderers — pure functions over a fixed IR.
+
+The chunks renderer follows the map v0.7 contract (ADR-0006, envelope v2);
+invariants specific to it live in tests/test_chunks_rag.py. This file pins
+only the md/json renderers and the one chunks shape every renderer test
+needs (envelope key set)."""
 
 import json
 
 from pdf_router.config import RendererConfig
 from pdf_router.ir import IR, Metadata, PageResult, SrcTool
-from pdf_router.renderers import chunks as chunks_renderer
 from pdf_router.renderers import json_renderer, md as md_renderer
+from pdf_router.renderers import chunks as chunks_renderer
 
 
 def make_ir() -> IR:
@@ -43,64 +48,17 @@ def test_md_page_markers() -> None:
     assert "<!-- page 2 -->" in out  # 1-indexed
 
 
-# --- chunks --------------------------------------------------------------------
+# --- chunks (shape only; full contract: test_chunks_rag.py) --------------------
 
 
-def test_chunks_jsonl_structure() -> None:
+def test_chunks_envelope_v2() -> None:
     out = chunks_renderer.render(make_ir(), config=RendererConfig())
     lines = [ln for ln in out.splitlines() if ln.strip()]
     assert lines, "expected at least one chunk"
     for ln in lines:
         chunk = json.loads(ln)
-        assert set(chunk) == {
-            "chunk_id",
-            "text",
-            "page",
-            "section",
-            "src_tool",
-            "error",
-            "images",
-        }
-
-
-def test_chunks_sections_and_pages() -> None:
-    out = chunks_renderer.render(make_ir(), config=RendererConfig())
-    chunks = [json.loads(ln) for ln in out.splitlines() if ln.strip()]
-    sections = {c["section"] for c in chunks}
-    assert sections == {"Section A", "Section B"}
-    pages = {c["page"] for c in chunks}
-    assert pages == {0, 1}
-    tools = {c["src_tool"] for c in chunks}
-    assert tools == {"pdf_inspector", "tesseract"}
-
-
-def test_chunks_carry_page_error() -> None:
-    """Reliability signal for RAG: chunks from a failed page carry
-    ``page.error`` so an ingest pipeline can drop them without joining
-    against the IR; healthy pages carry ``null``."""
-    ir = make_ir()
-    ir.pages[1].error = "rapidocr_failed: engine exploded"
-    out = chunks_renderer.render(ir, config=RendererConfig())
-    chunks = [json.loads(ln) for ln in out.splitlines() if ln.strip()]
-    assert all(c["error"] is None for c in chunks if c["page"] == 0)
-    failed = [c for c in chunks if c["page"] == 1]
-    assert failed
-    assert all(c["error"] == "rapidocr_failed: engine exploded" for c in failed)
-
-
-def test_chunks_long_block_split_with_overlap() -> None:
-    long_text = "word " * 2000  # ~10k chars ≈ 2500 tokens > 512
-    ir = IR(
-        pages=[PageResult(page=0, markdown=f"## Big\n\n{long_text}", src_tool=SrcTool.PDF_INSPECTOR)]
-    )
-    cfg = RendererConfig()
-    cfg.chunks.max_tokens = 100
-    cfg.chunks.overlap_tokens = 20
-    out = chunks_renderer.render(ir, config=cfg)
-    chunks = [json.loads(ln) for ln in out.splitlines() if ln.strip()]
-    assert len(chunks) > 1
-    for c in chunks:
-        assert len(c["text"]) <= 100 * 4 + 10  # within budget (strip slack)
+        assert {"chunk_id", "chunk_version", "type", "embed", "markdown", "metadata", "images"} <= set(chunk)
+        assert chunk["chunk_version"] == 2
 
 
 # --- json ----------------------------------------------------------------------
@@ -134,8 +92,8 @@ def test_chunks_include_images() -> None:
     out = chunks_renderer.render(ir, config=RendererConfig())
     lines = [ln for ln in out.splitlines() if ln.strip()]
     assert len(lines) >= 1
-    p0_chunk = next(json.loads(ln) for ln in lines if json.loads(ln)["page"] == 0)
-    p1_chunk = next(json.loads(ln) for ln in lines if json.loads(ln)["page"] == 1)
+    p0_chunk = next(json.loads(ln) for ln in lines if json.loads(ln)["metadata"]["page"] == 0)
+    p1_chunk = next(json.loads(ln) for ln in lines if json.loads(ln)["metadata"]["page"] == 1)
     assert p0_chunk["images"] == ["abc123/page0001_photo_00.png", "abc123/page0001_photo_01.png"]
     assert p1_chunk["images"] == []
 

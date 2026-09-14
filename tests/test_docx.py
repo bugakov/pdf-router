@@ -520,14 +520,15 @@ def test_renderers_flow_through_untouched(tmp_path: Path) -> None:
     md = render_markdown(ir)
     assert md.startswith("# Раздел")
     assert "Текст раздела." in md
-    # chunks: H1 does not open a section (## - #### do, PDF-pipeline rule);
-    # both the heading block and the paragraph land as chunks
+    # chunks (envelope v2): H1 does not open a section (## - #### do,
+    # PDF-pipeline rule); both the heading block and the paragraph land as
+    # chunks with the embed text carrying the material
     payloads = [json.loads(ln) for ln in render_chunks(ir).splitlines()]
-    assert payloads[0]["page"] == 0
-    joined = "\n".join(p["text"] for p in payloads)
+    assert payloads[0]["metadata"]["page"] == 0
+    joined = "\n".join(p["embed"] for p in payloads)
     assert "# Раздел" in joined
     assert "Текст раздела." in joined
-    assert all(p["src_tool"] == "docx_adapter" for p in payloads)
+    assert all(p["metadata"]["src_tool"] == "docx_adapter" for p in payloads)
 
 
 # ---------------------------------------------------------------------------
@@ -662,15 +663,15 @@ def test_golden_igi_volume_structure() -> None:
 
 def test_golden_igi_volume_chunks_nonempty() -> None:
     """The LLM/RAG target: chunks render from the golden volume and none of
-    them is empty."""
+    them is empty (embed is the vectorization text, envelope v2)."""
     path = _corpus_volume(IGI_VOLUME)
     ir = extract_ir(path)
     lines = [ln for ln in render_chunks(ir).splitlines() if ln.strip()]
     assert lines
     payloads = [json.loads(ln) for ln in lines]
-    assert all(p["text"].strip() for p in payloads)
+    assert all(p["embed"].strip() for p in payloads)
     # the volume's title page text survived into the material
-    joined = "\n".join(p["text"] for p in payloads)
+    joined = "\n".join(p["embed"] for p in payloads)
     assert "ИНЖЕНЕРНО-ГЕОЛОГИЧЕСКИХ ИЗЫСКАНИЙ" in joined
 
 

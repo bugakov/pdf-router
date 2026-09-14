@@ -40,7 +40,7 @@ _KNOWN_ROUTER_KEYS = {"log_level"}
 #: Accepted values for ``[router].log_level`` (case-insensitive).
 _VALID_LOG_LEVELS = ("debug", "info", "warning", "error")
 _KNOWN_RENDERERS_KEYS = {"output_dir", "page_markers", "chunks", "json"}
-_KNOWN_CHUNKS_KEYS = {"max_tokens", "overlap_tokens"}
+_KNOWN_CHUNKS_KEYS = {"max_tokens", "overlap_tokens", "summary", "embed_context"}
 _KNOWN_JSON_KEYS = {"include_page_bbox"}
 _KNOWN_ROUTING_KEYS = {
     "language",
@@ -60,14 +60,34 @@ _KNOWN_STRUCTURE_KEYS = {"table_engine", "heading_big_ratio", "heading_small_rat
 _VALID_TABLE_ENGINES = ("lineless", "wired")
 
 
+#: Accepted values for ``[renderers.chunks].summary`` (map v0.7, ADR-0006
+#: to come): the table-summary seam. ``facts`` (default) — deterministic
+#: stats rendered from the table grid; ``none`` — no summary; ``glm`` —
+#: reserved (opt-in cloud), rejected at load until implemented.
+_VALID_CHUNKS_SUMMARY = ("facts", "none")
+
+
 class ConfigError(Exception):
     """Raised when the TOML config is malformed or misses required keys."""
 
 
 @dataclass
 class ChunksConfig:
+    """``[renderers.chunks]`` — the RAG chunks renderer (map v0.7).
+
+    ``max_tokens``/``overlap_tokens`` budget the embed/markdown text of
+    one chunk (heuristic token = 4 chars). ``summary`` picks the table
+    summary engine: ``"facts"`` (default, deterministic stats from the
+    grid) or ``"none"``; ``"glm"`` is a reserved opt-in value — rejected
+    at load until implemented. ``embed_context`` toggles the context
+    preamble (document title + section headings) inside the ``embed``
+    text.
+    """
+
     max_tokens: int = 512
     overlap_tokens: int = 64
+    summary: str = "facts"
+    embed_context: bool = True
 
 
 @dataclass
@@ -268,6 +288,16 @@ def _parse_renderers(sec: Any) -> RendererConfig:
         cfg.chunks.max_tokens = int(chunks_sec["max_tokens"])
     if "overlap_tokens" in chunks_sec:
         cfg.chunks.overlap_tokens = int(chunks_sec["overlap_tokens"])
+    if "summary" in chunks_sec:
+        cfg.chunks.summary = str(chunks_sec["summary"])
+    if cfg.chunks.summary not in _VALID_CHUNKS_SUMMARY:
+        raise ConfigError(
+            f'[renderers.chunks] unknown summary "{cfg.chunks.summary}" '
+            f"(valid: {', '.join(_VALID_CHUNKS_SUMMARY)}; 'glm' is a "
+            "reserved opt-in value, not implemented yet)"
+        )
+    if "embed_context" in chunks_sec:
+        cfg.chunks.embed_context = bool(chunks_sec["embed_context"])
 
     json_sec = sec.get("json", {})
     if not isinstance(json_sec, dict):

@@ -41,6 +41,14 @@ never assume the native PDF-point frame (ADR-0005 §5: no rescaling —
 coordinates only when resource-cheap). Scan-sourced ``HeadingBlock.level``
 is restricted to {1, 2} (the box-height heuristic cannot honestly support
 1–6).
+
+IR 0.5.1 (additive, ADR-0006): ``Metadata.source_path`` — the input
+file path as given to ``core.process_pdf``, filled by core only.
+No version bump: an additive field with a default; ``from_dict``
+tolerates its absence so IR ≤ 0.5 payloads keep loading. The chunks
+renderer derives ``doc_id`` (12-hex SHA-256 of the resolved absolute
+path, the TKT-RT-12 sidecar schema) and ``doc_title`` (``title`` →
+basename fallback) from it.
 """
 
 from __future__ import annotations
@@ -100,6 +108,11 @@ class Metadata:
     pages_needing_ocr: list[int] = field(default_factory=list)  # 1-indexed
     ocr_reasons_by_page: list[OcrReasonEntry] = field(default_factory=list)
     source_format: str = "pdf"  # IR 0.3: "pdf" | "docx"; IR 0.4 adds "djvu"
+    # IR 0.5.1 (additive, ADR-0006): the input path as given to
+    # core.process_pdf. Filled by core only — adapters stay path-agnostic
+    # (their contract is one callable path -> IR, and legacy adapters are
+    # free to ignore it). None for hand-built IRs and old payloads.
+    source_path: str | None = None
 
 
 # --- Structural blocks (IR 0.2) ----------------------------------------------
@@ -314,6 +327,9 @@ def from_dict(d: dict[str, Any]) -> IR:
         ],
         # IR 0.2 dicts predate source_format; default keeps them loadable.
         source_format=md.get("source_format", "pdf"),
+        # IR 0.5.1: pre-0.5.1 payloads predate source_path — the field is
+        # additive with a default, no version bump.
+        source_path=md.get("source_path"),
     )
     pages: list[PageResult] = []
     for p in d.get("pages", []):

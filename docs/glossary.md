@@ -30,6 +30,20 @@ A structural element on a page: `HeadingBlock`, `TableBlock`, `FigureBlock`,
 `FormulaBlock`. Lives on `PageResult.blocks` since IR 0.2. See
 [ADR-0001](adr/0001-ir-structural-blocks.md).
 
+## Chunk (RAG envelope)
+
+One JSONL line of the chunks renderer (envelope `chunk_version: 2`,
+[ADR-0006](adr/0006-rag-chunks.md), `src/pdf_router/renderers/chunks.py`).
+Fields: `chunk_id` (`{page}-t{n}` for tables, `{page}-{seq:03d}` for text,
+`-{k:02d}` suffix on split parts), `chunk_version`, `type ∈ {table,
+table_part, text}`, `embed` (the vectorization text, assembled by the
+renderer — the pipeline embeds it as-is), `markdown` (the generation
+text: context header + pipe grid + summary), `metadata` (`doc_id`,
+`doc_title`, `source_format`, `page`, `section`, `src_tool`, `error`;
+table chunks add `table: {table_id, part, parts, n_rows, n_cols,
+header, source}`), `images` (sidecar paths). Same IR in, byte-identical
+JSONL out.
+
 ## CropBox
 
 A rectangle in PDF page-coordinate space defining the visible region of a
@@ -115,13 +129,31 @@ and [ADR-0005](adr/0005-ocr-structure.md) for the 0.4 → 0.5 bump
 (`TableBlock.source`/`HeadingBlock.source` provenance, OCR-side
 structure sources — an old reader raises `ValueError`).
 
+## doc-id
+
+12-hex SHA-256 of the resolved absolute document path — the same id in
+every artifact of one run: the sidecar images folder
+(`<output_dir>/<doc-id>/images/`, TKT-RT-12 schema) and the `doc_id`
+field of each RAG chunk (ADR-0006). Derived by
+`extract_images.doc_id_from_path` from `Metadata.source_path` (filled
+by core at the pipeline entry point).
+
+## Metadata.source_path
+
+The input file path exactly as given to `core.process_pdf` (IR 0.5.1,
+additive — no version bump; old payloads keep loading). Adapters do not
+fill it: core stamps the path onto the IR once, after the format gate.
+The chunks renderer derives `doc_id` and the `doc_title` fallback from
+it. None for hand-built IRs.
+
 ## Markdown (page-level)
 
 `PageResult.markdown: str` — the flat per-page markdown produced by the
 format's inspector (PDF: `pdf_inspector.extract_pages_markdown`; DOCX:
-the native adapter's body walk). Authoritative for the `md` and `chunks`
-renderers. The `blocks` field is **advisory** — it does not override
-`markdown`.
+the native adapter's body walk). Authoritative for the `md` renderer and
+for the **text half** of the `chunks` renderer (pipe tables covered by a
+`TableBlock` are subtracted from it; [ADR-0006](adr/0006-rag-chunks.md)).
+The `blocks` field is **advisory** — it does not override `markdown`.
 
 ## MCID (Marked Content ID)
 
@@ -151,7 +183,8 @@ non-PDF input with a typed error before touching its Rust core.
 
 A pure function `(ir, *, config) -> str`. Three renderers: `md`
 (`src/pdf_router/renderers/md.py:12`), `chunks`
-(`src/pdf_router/renderers/chunks.py:78`), `json`
+(`src/pdf_router/renderers/chunks.py:481` — hybrid RAG envelope v2,
+[ADR-0006](adr/0006-rag-chunks.md)), `json`
 (`src/pdf_router/renderers/json_renderer.py:11`). Renderers may not import
 adapters (`tests/test_conventions.py:37` enforces this).
 

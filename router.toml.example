@@ -126,3 +126,15 @@ log_level = "info"          # debug | info | warning | error; default "warning"
 #   glm_ocr:           api_key, base_url (required); model, timeout
 #   deepseek_ocr:      api_key, base_url (required); model, upload_url,
 #                      prompt, timeout, max_tokens, dpi
+
+# --- Post-OCR structure pass (IR 0.5, ADR-0005) ------------------------------
+# Every OCR'd page (scanned PDF or layerless djvu) grows real TableBlock /
+# HeadingBlock entries. Table recovery runs RapidAI TableStructureRec on
+# CPU onnxruntime; weights auto-download from ModelScope on first use,
+# then fully offline. Headings come from a box-height heuristic against
+# the page-median line height (levels {1, 2} only — honest, not 1-6).
+#[structure]
+#table_engine = "lineless"  # "lineless" (default; mixed ruled/unruled tables)
+                            # or "wired" (fully ruled only, ~8 MB model)
+#heading_big_ratio = 1.8     # line height >= this x page median -> level 1
+#heading_small_ratio = 1.3   # >= this (and < big) -> level 2

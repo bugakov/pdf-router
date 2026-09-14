@@ -594,7 +594,7 @@ def test_cli_full_run_writes_three_renderers(tmp_path: Path, monkeypatch) -> Non
     assert (out / "том.ir.json").is_file()
     ir_json = json.loads((out / "том.ir.json").read_text(encoding="utf-8"))
     assert ir_json["metadata"]["source_format"] == "docx"
-    assert ir_json["ir_version"] == "0.4"
+    assert ir_json["ir_version"] == "0.5"
 
 
 def test_docx_info_matches_ir(tmp_path: Path) -> None:

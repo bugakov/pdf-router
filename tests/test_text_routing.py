@@ -17,9 +17,10 @@ from pdf_router.ir import PageResult, SrcTool
 def _fake_ocr(calls):
     """Return a monkeypatch replacement for core.ocr_page recording calls."""
 
+    # IR 0.5 (ADR-0005): ocr_page returns (markdown, engine, blocks).
     def ocr_page(pdf_path, page_idx, config):
         calls.append((pdf_path, page_idx))
-        return "OCR TEXT", config.routing.ocr_fallback_engine
+        return "OCR TEXT", config.routing.ocr_fallback_engine, []
 
     return ocr_page
 

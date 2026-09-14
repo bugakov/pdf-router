@@ -29,6 +29,18 @@ runs). Loading an IR 0.4 payload with an
 older reader raises ``ValueError`` on those enum values — the version bump
 makes the contract change visible instead of silently corrupting
 provenance.
+
+IR 0.5 (ADR-0005, OCR structure): scanned pages grow real blocks.
+``TableBlock`` gains a ``source`` field (native default ``markdown_pipe``;
+OCR values ``ocr_table_lineless`` / ``ocr_table_wired`` /
+``ocr_pipe_fallback`` / ``ocr_glm_layout``); ``HeadingBlock.source`` gains
+``ocr_box_height`` / ``ocr_glm_layout``. **bboxes on OCR-sourced blocks
+stay in raster pixels** (top-left origin, the scan's own frame) — they
+are hints, not PDF points; consumers must treat them as advisory and
+never assume the native PDF-point frame (ADR-0005 §5: no rescaling —
+coordinates only when resource-cheap). Scan-sourced ``HeadingBlock.level``
+is restricted to {1, 2} (the box-height heuristic cannot honestly support
+1–6).
 """
 
 from __future__ import annotations
@@ -37,7 +49,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
 
-IR_VERSION = "0.4"
+IR_VERSION = "0.5"
 
 
 class SrcTool(str, Enum):
@@ -130,12 +142,20 @@ class TableBlock:
     is short text, no digits). ``bbox`` is the table region from
     ``extract_text_in_regions`` — the *region* bbox, not per-cell (per-cell
     tables are not in pdf-inspector 1.17 Python bindings; only in Rust).
+
+    ``source`` (IR 0.5, ADR-0005): where the rows came from. Native path
+    default ``markdown_pipe`` (pipe parsing of the page markdown, pdf and
+    docx alike); OCR path values ``ocr_table_lineless`` /
+    ``ocr_table_wired`` (local structure pass), ``ocr_pipe_fallback``
+    (markdown of boxless engines), ``ocr_glm_layout`` (cloud opt-in). For
+    OCR sources ``bbox`` is in raster pixels — see the module docstring.
     """
 
     markdown: str
     rows: list[list[str]] = field(default_factory=list)
     header_rows: int = 0
     bbox: BBox | None = None
+    source: str = "markdown_pipe"
 
 
 @dataclass
@@ -317,6 +337,9 @@ def from_dict(d: dict[str, Any]) -> IR:
                         rows=[list(r) for r in b.get("rows", [])],
                         header_rows=int(b.get("header_rows", 0)),
                         bbox=bbox,
+                        # IR 0.5: pre-0.5 payloads predate source — the
+                        # only producer then was the native pipe parser.
+                        source=str(b.get("source", "markdown_pipe")),
                     )
                 )
             elif kind == "FigureBlock":

@@ -22,6 +22,13 @@ All engines acquire page rasters through :mod:`pdf_router.rasterize`
 signatures keep ``(path, page_idx)``; the format dispatch lives below
 them. Only ``pdf_inspector_ocr`` is exempt — its Rust core opens PDFs
 itself, so djvu is a typed refusal there.
+
+IR 0.5 (ADR-0005): ``ocr_page`` returns ``(markdown, engine_name, blocks)``.
+Blocks come from :mod:`pdf_router.structure` — the full geometry pass for
+rapidocr (raster + boxes are alive right here; rasterize-once), glm_ocr's
+``layout_details`` for the cloud engine, and the pipe-markdown fallback
+for boxless engines. A structure failure degrades to no blocks; it never
+fails a page whose OCR text is already good.
 """
 
 from __future__ import annotations
@@ -33,6 +40,11 @@ from typing import Any
 
 from pdf_router.config import RouterConfig
 from pdf_router.rasterize import page_raster_array, page_single_pdf, rasterize_page
+from pdf_router.structure import (
+    blocks_from_glm,
+    blocks_from_pipe_markdown,
+    structure_page,
+)
 
 logger = logging.getLogger("pdf_router")
 
@@ -169,7 +181,36 @@ def _rapidocr_get_engine(config: RouterConfig):
         return engine
 
 
-def _ocr_rapidocr(pdf_path: str, page_idx: int, config: RouterConfig) -> str:
+def _rapidocr_triples(result: Any) -> list:
+    """RapidOCR result -> ``[(box(4, 2), text, score), ...]``.
+
+    That is the input contract of the TableStructureRec engines (ST-03
+    bench: rapidocr hands out flat ``(8,)`` boxes, the table engines want
+    ``(4, 2)`` quads). Zip order is det-box order, matching txts/scores;
+    a box that fails to reshape is dropped — structure-only loss, the
+    flat markdown is untouched.
+    """
+    import numpy as np
+
+    # result.boxes/txts/scores may be numpy arrays; `or` on an ndarray
+    # raises (ambiguous truth). Explicit None-checks, then list().
+    boxes = getattr(result, "boxes", None)
+    txts = getattr(result, "txts", None)
+    scores = getattr(result, "scores", None)
+    boxes = [] if boxes is None else list(boxes)
+    txts = [] if txts is None else list(txts)
+    scores = [] if scores is None else list(scores)
+    out: list = []
+    for box, text, score in zip(boxes, txts, scores):
+        try:
+            quad = np.asarray(box, dtype=float).reshape(4, 2)
+        except (TypeError, ValueError):
+            continue
+        out.append((quad, str(text), float(score)))
+    return out
+
+
+def _ocr_rapidocr(pdf_path: str, page_idx: int, config: RouterConfig) -> tuple[str, list]:
     """OCR via RapidOCR (RapidAI) on onnxruntime.
 
     Renders the page through the raster seam (pymupdf for pdf, ddjvu for
@@ -177,6 +218,11 @@ def _ocr_rapidocr(pdf_path: str, page_idx: int, config: RouterConfig) -> str:
     already y-sorted; v1 reading order is a plain
     join of lines (column interleaving on drawings is acceptable — see
     wayfinder map).
+
+    Returns ``(markdown, blocks)``: after the flat join, the line
+    geometry (boxes + scores) that v0.5 threw away feeds the structure
+    pass (ADR-0005). Structure failure degrades to the flat text —
+    logged, never raised.
 
     Tuning knobs (all in the ``[ocr.rapidocr]`` section):
     - ``dpi`` (default 150): raster resolution. Probe showed OCR time is
@@ -187,8 +233,6 @@ def _ocr_rapidocr(pdf_path: str, page_idx: int, config: RouterConfig) -> str:
     Language hint comes from ``routing.language`` via ``_rapidocr_language``
     (not from this function's params).
     """
-    import numpy as np
-
     params = _lookup_params(config, "rapidocr")
     dpi = int(params.get("dpi", 150))
 
@@ -207,10 +251,27 @@ def _ocr_rapidocr(pdf_path: str, page_idx: int, config: RouterConfig) -> str:
     except Exception as exc:
         raise OcrError(f"rapidocr inference failed: {exc}") from exc
 
-    lines = [str(t) for t in (result.txts or []) if str(t).strip()]
+    txts = [str(t) for t in (result.txts or [])]
+    lines = [t for t in txts if t.strip()]
     if not lines:
         raise OcrError(f"page {page_idx + 1}: empty rapidocr result")
-    return "\n".join(lines)
+    md = "\n".join(lines)
+
+    # IR 0.5 (ADR-0005): raster and line geometry are alive right here
+    # (rasterize-once, TKT-RT-10) — feed the structure pass. A structure
+    # failure must never kill a page whose OCR text is already good.
+    blocks: list = []
+    triples = _rapidocr_triples(result)
+    if triples:
+        try:
+            blocks = structure_page(img, triples, config)
+        except Exception as exc:
+            logger.warning(
+                "page %d: structure pass failed, keeping flat text: %s",
+                page_idx + 1,
+                exc,
+            )
+    return md, blocks
 
 
 def _ocr_pdf_inspector(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
@@ -345,7 +406,9 @@ def _ocr_glm(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
 
     Renders the page to a single-page PDF (verbatim page extract for pdf,
     raster-wrapped page for djvu — the raster seam) and POSTs it as
-    base64 data-URL. Returns markdown from ``md_results``.
+    base64 data-URL. Returns ``(markdown, layout_details_or_None)`` —
+    markdown from ``md_results``, layout from ``layout_details`` (feeds
+    :func:`pdf_router.structure.blocks_from_glm`).
     Requires ``api_key`` in params; ``base_url`` defaults to Z.ai endpoint.
 
     Empirical notes (live-tested 2026-08-27, from the retired adapter):
@@ -394,10 +457,13 @@ def _ocr_glm(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
     except Exception as exc:
         raise OcrError(f"glm_ocr layout_parsing failed: {exc}") from exc
 
-    md = r.json().get("md_results")
+    payload = r.json()
+    md = payload.get("md_results")
     if not isinstance(md, str) or not md.strip():
         raise OcrError("glm_ocr: empty md_results in response")
-    return md.strip()
+    # layout_details feeds blocks_from_glm; absent/empty -> no blocks.
+    # Single-page input maps 1:1 to response page 0.
+    return md.strip(), payload.get("layout_details")
 
 
 def _ocr_deepseek(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
@@ -508,10 +574,13 @@ def ocr_page(
     pdf_path: str,
     page_idx: int,
     config: RouterConfig,
-) -> tuple[str, str]:
+) -> tuple[str, str, list]:
     """Run OCR on one page using the configured fallback engine.
 
-    Returns ``(markdown, engine_name)``.
+    Returns ``(markdown, engine_name, blocks)`` — blocks are the IR 0.5
+    structural blocks (ADR-0005): geometry pass for rapidocr, glm
+    ``layout_details`` for glm_ocr, pipe-markdown fallback for the
+    boxless engines. Structure failures degrade to ``[]``.
 
     Args:
         pdf_path: path to the PDF file.
@@ -532,19 +601,39 @@ def ocr_page(
         # rapidocr reads its own knobs (dpi, det/rec model_type) from the
         # [ocr.rapidocr] section and the language hint from
         # config.routing.language; the dispatcher does not plumb either.
-        md = _ocr_rapidocr(pdf_path, page_idx, config)
-        return md, engine
+        md, blocks = _ocr_rapidocr(pdf_path, page_idx, config)
+        return md, engine, blocks
     elif engine == "pdf_inspector_ocr":
         md = _ocr_pdf_inspector(pdf_path, page_idx, params)
-        return md, engine
+        return md, engine, _boxless_blocks(md)
     elif engine == "tesseract":
         md = _ocr_tesseract(pdf_path, page_idx, params)
-        return md, engine
+        return md, engine, _boxless_blocks(md)
     elif engine == "glm_ocr":
-        md = _ocr_glm(pdf_path, page_idx, params)
-        return md, engine
+        md, layout = _ocr_glm(pdf_path, page_idx, params)
+        blocks: list = []
+        if layout:
+            try:
+                blocks = blocks_from_glm(layout)
+            except Exception as exc:
+                logger.warning("glm layout_details -> blocks failed: %s", exc)
+        return md, engine, blocks
     elif engine == "deepseek_ocr":
         md = _ocr_deepseek(pdf_path, page_idx, params)
-        return md, engine
+        return md, engine, _boxless_blocks(md)
     else:
         raise OcrError(f"unknown ocr_fallback_engine: {engine!r}")
+
+
+def _boxless_blocks(markdown: str) -> list:
+    """Pipe-table fallback blocks for engines without box geometry.
+
+    The cheapest honest layer of the hybrid (ADR-0005 §1): parse pipe
+    tables out of the engine markdown, re-tagged ``ocr_pipe_fallback``.
+    No fake geometry, no headings. Failure degrades to no blocks.
+    """
+    try:
+        return blocks_from_pipe_markdown(markdown or "")
+    except Exception as exc:
+        logger.warning("pipe-fallback structure pass failed: %s", exc)
+        return []

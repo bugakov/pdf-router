@@ -165,15 +165,18 @@ name — is a `ConfigError` at load, before any page is processed.
 - **Zero or more** OCR calls per PDF/DJVU page, via the single configured
   `[routing].ocr_fallback_engine` (params from its `[ocr.*]` section).
   DOCX is born-digital — no OCR pass exists for it.
+- **Zero or one** structure pass per OCR'd page (`structure.py`):
+  rapidocr line geometry + the lineless/wired table engine →
+  `TableBlock`s; box-height heuristic → `HeadingBlock`s (ADR-0005).
 - **One** set of renderers, each reading the same IR.
 
 See `docs/glossary.md` for terms and `docs/adr/` for design decisions.
 
-## IR contract (0.4)
+## IR contract (0.5)
 
 ```python
 {
-  "ir_version": "0.4",
+  "ir_version": "0.5",
   "metadata": {
     "source_format": "pdf" | "docx" | "djvu",   # the container format
     "pdf_type": "text_based" | "scanned" | "image_based" | "mixed",
@@ -188,8 +191,8 @@ See `docs/glossary.md` for terms and `docs/adr/` for design decisions.
       "markdown": str,                # authoritative for md/chunks renderers
       "src_tool": "pdf_inspector" | "docx_adapter" | "djvu_adapter" | "djvu_text_layer" | ...,
       "blocks": [                     # advisory
-        {"kind": "HeadingBlock", "level": int, "text": str, "bbox": {...} | null, "source": "structure_tree"|"font_size_fallback"|"docx_style"},
-        {"kind": "TableBlock", "markdown": str, "rows": list[list[str]], "header_rows": int, "bbox": ...},
+        {"kind": "HeadingBlock", "level": int, "text": str, "bbox": {...} | null, "source": "structure_tree"|"font_size_fallback"|"docx_style"|"ocr_box_height"|"ocr_glm_layout"},
+        {"kind": "TableBlock", "markdown": str, "rows": list[list[str]], "header_rows": int, "bbox": ..., "source": "markdown_pipe"|"ocr_table_lineless"|"ocr_table_wired"|"ocr_pipe_fallback"|"ocr_glm_layout"},
         {"kind": "FigureBlock", "bbox": null, "caption": str | null, "image_index": int | null},
         ...
       ]
@@ -201,14 +204,23 @@ See `docs/glossary.md` for terms and `docs/adr/` for design decisions.
 `PageResult.markdown` is preserved verbatim from the inspector (PDF:
 pdf-inspector; DOCX: the native adapter; DJVU: the hidden text layer or
 empty); `blocks` is a structural decomposition populated when the adapter
-has upstream data for it (djvu: always empty). See
+has upstream data for it — and, since IR 0.5, by the **post-OCR structure
+pass**: every OCR'd page (scanned PDF or layerless djvu) grows real
+`TableBlock`s (RapidAI TableStructureRec over the rapidocr line geometry)
+and `HeadingBlock`s (box-height heuristic, honest levels {1, 2}). OCR
+bboxes stay in raster pixels (hints, not PDF points). See
 [ADR-0001](docs/adr/0001-ir-structural-blocks.md),
-[ADR-0003](docs/adr/0003-docx-native-parse.md) and
-[ADR-0004](docs/adr/0004-djvu-ingest.md).
+[ADR-0003](docs/adr/0003-docx-native-parse.md),
+[ADR-0004](docs/adr/0004-djvu-ingest.md) and
+[ADR-0005](docs/adr/0005-ocr-structure.md).
 
 IR 0.4 adds `"djvu"` to `source_format` and two `SrcTool` values
-(`djvu_adapter`, `djvu_text_layer`); loading an 0.4 payload with an older
-reader raises `ValueError` — that is the version bump doing its job.
+(`djvu_adapter`, `djvu_text_layer`); IR 0.5 adds the post-OCR structure
+pass — `TableBlock`/`HeadingBlock` gain a `source` provenance field with
+five OCR values, and scanned pages get real blocks
+([ADR-0005](docs/adr/0005-ocr-structure.md)). Loading an 0.5 payload with
+an older reader raises `ValueError` — that is the version bump doing its
+job.
 
 ## Indexing
 
@@ -243,6 +255,7 @@ src/pdf_router/
     djvu.py             # DJVU: djvulibre subprocess adapter (ADR-0004)
   rasterize.py          # format-aware page raster seam (pymupdf | ddjvu)
   ocr.py                # flat OCR engines: rapidocr/pdf_inspector_ocr/tesseract/glm/deepseek
+  structure.py          # post-OCR structure pass: tables (lineless/wired) + headings (ADR-0005)
   renderers/
     md.py, chunks.py, json_renderer.py
 tests/

@@ -12,9 +12,11 @@ SRC = Path(__file__).parent.parent / "src" / "pdf_router"
 
 
 def test_ir_version() -> None:
+    # 0.5: OCR structure blocks (TableBlock.source, scan headings {1,2} —
+    #   ADR-0005 / TKT-ST-04);
     # 0.4: djvu ingest (SrcTool.DJVU_TEXT_LAYER — ADR-0004 / TKT-DJV-04);
     # 0.3 was format-neutral IR (source_format, DOCX_ADAPTER — ADR-0003).
-    assert IR_VERSION == "0.4"
+    assert IR_VERSION == "0.5"
 
 
 @pytest.mark.parametrize("cls", [Metadata, PageResult, IR])

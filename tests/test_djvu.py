@@ -49,9 +49,10 @@ CORPUS_DIR = Path("/home/scanum/vbrdb/orchestrator/uploads")
 
 
 def _fake_ocr(calls: list, text: str = "ocr text", engine: str = "rapidocr"):
+    # IR 0.5 (ADR-0005): ocr_page returns (markdown, engine, blocks).
     def ocr_page(pdf_path, page_idx, config):
         calls.append((pdf_path, page_idx))
-        return text, engine
+        return text, engine, []
 
     return ocr_page
 
@@ -108,7 +109,7 @@ def test_inspector_rejects_truncated_djvu(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# IR 0.4: round-trip and honest metadata
+# IR 0.5: round-trip and honest metadata
 # ---------------------------------------------------------------------------
 
 
@@ -117,7 +118,7 @@ def test_ir04_roundtrip_preserves_djvu_provenance(text_layer_djvu: Path) -> None
 
     ir = extract_ir(str(text_layer_djvu))
     d = to_dict(ir)
-    assert d["ir_version"] == IR_VERSION == "0.4"
+    assert d["ir_version"] == IR_VERSION == "0.5"
     assert d["pages"][0]["src_tool"] == "djvu_text_layer"
     ir2 = from_dict(d)
     assert ir2.pages[0].src_tool is SrcTool.DJVU_TEXT_LAYER
@@ -218,9 +219,12 @@ def test_rapidocr_path_flows_through_seam(
 
     monkeypatch.setattr(ocr_mod, "page_raster_array", fake_array)
     monkeypatch.setattr(ocr_mod, "_rapidocr_get_engine", lambda cfg: FakeEngine())
-    md, engine = ocr_mod.ocr_page(str(text_layer_djvu), 1, RouterConfig())
+    md, engine, blocks = ocr_mod.ocr_page(str(text_layer_djvu), 1, RouterConfig())
     assert md == "rendered line"
     assert engine == "rapidocr"
+    # FakeEngine carries no box geometry -> no triples -> no structure pass:
+    # the page degrades to flat text with zero blocks (ADR-0005 contract).
+    assert blocks == []
     assert seen["args"][1] == 1
 
 
@@ -387,8 +391,8 @@ def test_real_ocr_on_corpus_anchor() -> None:
     if anchor is None:
         pytest.skip("corpus anchor not available")
     ocr = __import__("pdf_router.ocr", fromlist=["ocr_page"]).ocr_page
-    md1, engine1 = ocr(str(anchor), 0, RouterConfig())
-    md2, engine2 = ocr(str(anchor), 0, RouterConfig())
+    md1, engine1, blocks1 = ocr(str(anchor), 0, RouterConfig())
+    md2, engine2, _ = ocr(str(anchor), 0, RouterConfig())
     assert engine1 == engine2 == "rapidocr"
     assert md1.strip()
     assert md1 == md2

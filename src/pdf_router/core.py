@@ -233,8 +233,11 @@ def _process_text_for_page(page, pdf_path: str, config: RouterConfig) -> None:
     # Set src_tool BEFORE the call so it is correct even on failure.
     _src = _engine_to_src_tool(config.routing.ocr_fallback_engine)
     try:
-        md, engine = ocr_page(pdf_path, page.page, config)
+        md, _engine, blocks = ocr_page(pdf_path, page.page, config)
         page.markdown = md
+        # IR 0.5 (ADR-0005): OCR pages carry real blocks. The old native
+        # blocks described the native markdown we just replaced — both go.
+        page.blocks = blocks
         page.src_tool = _src
         page.error = None
     except OcrError as exc:

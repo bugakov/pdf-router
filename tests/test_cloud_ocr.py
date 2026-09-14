@@ -52,10 +52,11 @@ def test_glm_ocr_page_mocked(p27_pdf) -> None:
     resp = _resp(json_data={"md_results": "# Heading\n\nbody text"})
 
     with mock.patch("requests.post", return_value=resp) as post:
-        md = _ocr_glm(str(p27_pdf), 0, {"api_key": "sk-test", "base_url": "https://x"})
+        md, layout = _ocr_glm(str(p27_pdf), 0, {"api_key": "sk-test", "base_url": "https://x"})
 
     assert "# Heading" in md
     assert "body text" in md
+    assert layout is None  # stub response has no layout_details
     # standard endpoint layout_parsing with inline single-page PDF
     url = post.call_args.args[0]
     body = post.call_args.kwargs["json"]

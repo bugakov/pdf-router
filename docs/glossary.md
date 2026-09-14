@@ -78,9 +78,10 @@ yields real text answers without OCR (`src_tool="djvu_text_layer"`);
 layerless pages get `src_tool="djvu_adapter"` and are OCR'd over the
 rendered raster. `pdf_type` is always `"scanned"` with confidence 1.0.
 No sidecar images (a djvu page *is* a page-background scan — the same
-rule that filters scanned PDF pages); `blocks=[]` always (no structural
-data in the format). `pdf_inspector_ocr` is PDF-only by nature (Rust
-pdfium core) — djvu routes through any other engine.
+rule that filters scanned PDF pages); structural blocks come from the
+[structure pass](#structure-pass) like any OCR'd page. `pdf_inspector_ocr`
+is PDF-only by nature (Rust pdfium core) — djvu routes through any other
+engine.
 
 ## Hidden text layer
 
@@ -109,7 +110,10 @@ non-backward-compatible changes; see ADR-0001 for the 0.1 → 0.2 bump,
 (`Metadata.source_format`, `SrcTool.DOCX_ADAPTER` — the IR became
 format-neutral) and [ADR-0004](adr/0004-djvu-ingest.md) for the
 0.3 → 0.4 bump (`source_format` gains `"djvu"`, `SrcTool` gains
-`DJVU_ADAPTER`/`DJVU_TEXT_LAYER` — an old reader raises `ValueError`).
+`DJVU_ADAPTER`/`DJVU_TEXT_LAYER` — an old reader raises `ValueError`)
+and [ADR-0005](adr/0005-ocr-structure.md) for the 0.4 → 0.5 bump
+(`TableBlock.source`/`HeadingBlock.source` provenance, OCR-side
+structure sources — an old reader raises `ValueError`).
 
 ## Markdown (page-level)
 
@@ -194,9 +198,27 @@ native implementation may be swapped without an IR bump
 the djvu file's embedded layer, not from our OCR. Defined at
 `src/pdf_router/ir.py:41`.
 
+## Structure pass
+
+The post-OCR stage (`src/pdf_router/structure.py`,
+[ADR-0005](adr/0005-ocr-structure.md)) that recovers structural blocks
+for OCR'd pages — previously they stayed `blocks=[]`. Inputs: the page
+raster and OCR line triples `(box(4,2), text, score)` that rapidocr
+already returned (they used to be discarded). Table engine: `lineless`
+(lineless-table-rec, ~88 MB onnx, downloaded on first use like
+rapidocr's models) with span-aware grid recovery from the engine's
+pred_html — rowspan/colspan is the authoritative grid, logic_points are
+not consumed for cell placement. Headings: box-height heuristic against
+the page median (level 1–2, `[structure]` thresholds in TOML). Engines
+without line boxes degrade to pipe-table parsing of their markdown; glm
+feeds `layout_details` when present. Provenance on `*.source`:
+`ocr_table_lineless` / `ocr_table_wired` / `ocr_glm_layout` /
+`ocr_box_height` / `ocr_pipe_fallback` (native paths keep
+`structure_tree`, `font_size_fallback`, `markdown_pipe`). Table
+coordinates are raster pixels; native bboxes stay in PDF points.
+
 ## Structure-tree
 
-The tagged-PDF accessibility tree. Returned by
 `pdf_inspector.extract_structure_elements` as `list[StructureElement]`
 with `page`, `mcid`, `role`. Roles observed in our corpus: `P` (paragraph),
 `Span`, `H1`/`H2` (rare; H3..H6 not used in the corpus), `Figure`, `Link`,

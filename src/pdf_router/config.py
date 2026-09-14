@@ -3,7 +3,9 @@
 Precedence (locked): CLI flag > TOML file > built-in default. There is no
 env-var lookup for keys. OCR model: ``[ocr.<engine>]`` sections STORE engine
 params; exactly ONE engine runs, picked by ``[routing].ocr_fallback_engine``.
-Sections of unselected engines are validated but otherwise ignored. Unknown
+Sections of unselected engines are validated but otherwise ignored. The
+``[structure]`` section (IR 0.5, ADR-0005) configures the post-OCR structure
+pass: table engine variant + heading-ratio thresholds. Unknown
 sections/keys log a WARNING and are ignored (forward-compat).
 
 The library never writes ``os.environ``. pdf-inspector's Rust core reads its
@@ -33,7 +35,7 @@ OCR_ENGINE_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
 #: All selectable engine names for ``routing.ocr_fallback_engine``.
 _KNOWN_OCR_ENGINES = {"rapidocr", *OCR_ENGINE_REQUIRED_KEYS}
 
-_KNOWN_TOP_LEVEL = {"router", "ocr", "renderers", "routing"}
+_KNOWN_TOP_LEVEL = {"router", "ocr", "renderers", "routing", "structure"}
 _KNOWN_ROUTER_KEYS = {"log_level"}
 #: Accepted values for ``[router].log_level`` (case-insensitive).
 _VALID_LOG_LEVELS = ("debug", "info", "warning", "error")
@@ -48,6 +50,14 @@ _KNOWN_ROUTING_KEYS = {
     "extract_vector_diagrams",
     "ocr_fallback_engine",
 }
+_KNOWN_STRUCTURE_KEYS = {"table_engine", "heading_big_ratio", "heading_small_ratio"}
+
+#: Accepted values for ``[structure].table_engine`` (ADR-0005 §2/§7):
+#: ``auto`` (table_cls routing) is documented but deliberately REJECTED at
+#: load until the classifier wheel is vendored — a config that silently
+#: selects a non-existent engine would only surface as a runtime error on
+#: the first scanned page.
+_VALID_TABLE_ENGINES = ("lineless", "wired")
 
 
 class ConfigError(Exception):
@@ -92,6 +102,24 @@ class RoutingConfig:
 
 
 @dataclass
+class StructureConfig:
+    """Post-OCR structure pass knobs (IR 0.5, ADR-0005).
+
+    ``table_engine``: which RapidAI TableStructureRec model recovers
+    scanned tables — ``"lineless"`` (default; handles the corpus norm of
+    mixed ruled-header/unruled-body tables) or ``"wired"`` (fully ruled
+    tables only; 8 MB model vs 88 MB). ``heading_big_ratio`` /
+    ``heading_small_ratio`` are line-height multiples of the page-median
+    OCR box height: level 1 needs ``big``, level 2 needs ``small`` (scan
+    headings stop at {1, 2} — the heuristic cannot honestly support 1–6).
+    """
+
+    table_engine: str = "lineless"
+    heading_big_ratio: float = 1.8
+    heading_small_ratio: float = 1.3
+
+
+@dataclass
 class RouterConfig:
     """Everything the pipeline needs.
 
@@ -105,6 +133,7 @@ class RouterConfig:
     log_level: str = "warning"
     renderers: RendererConfig = field(default_factory=RendererConfig)
     routing: RoutingConfig = field(default_factory=RoutingConfig)
+    structure: StructureConfig = field(default_factory=StructureConfig)
 
     @classmethod
     def from_toml(cls, path: str | Path | None) -> "RouterConfig":
@@ -162,8 +191,15 @@ class RouterConfig:
 
         renderers = _parse_renderers(data.get("renderers", {}))
         routing = _parse_routing(data.get("routing", {}))
+        structure = _parse_structure(data.get("structure", {}))
         _validate_ocr_selection(engines, routing)
-        return cls(ocr_engines=engines, log_level=log_level, renderers=renderers, routing=routing)
+        return cls(
+            ocr_engines=engines,
+            log_level=log_level,
+            renderers=renderers,
+            routing=routing,
+            structure=structure,
+        )
 
 
 def _validate_ocr_selection(
@@ -262,4 +298,30 @@ def _parse_routing(sec: Any) -> RoutingConfig:
     if "ocr_fallback_engine" in sec:
         cfg.ocr_fallback_engine = str(sec["ocr_fallback_engine"])
 
+    return cfg
+
+
+def _parse_structure(sec: Any) -> StructureConfig:
+    if not isinstance(sec, dict):
+        raise ConfigError("[structure] must be a table")
+    _warn_unknown(sec, _KNOWN_STRUCTURE_KEYS, "[structure]")
+
+    cfg = StructureConfig()
+    if "table_engine" in sec:
+        cfg.table_engine = str(sec["table_engine"])
+    if cfg.table_engine not in _VALID_TABLE_ENGINES:
+        raise ConfigError(
+            f'[structure] unknown table_engine "{cfg.table_engine}" '
+            f"(valid: {', '.join(_VALID_TABLE_ENGINES)}; 'auto' awaits the "
+            "table_cls wheel, ADR-0005 §7)"
+        )
+    if "heading_big_ratio" in sec:
+        cfg.heading_big_ratio = float(sec["heading_big_ratio"])
+    if "heading_small_ratio" in sec:
+        cfg.heading_small_ratio = float(sec["heading_small_ratio"])
+    if not 0 < cfg.heading_small_ratio <= cfg.heading_big_ratio:
+        raise ConfigError(
+            "[structure] heading thresholds must satisfy "
+            "0 < heading_small_ratio <= heading_big_ratio"
+        )
     return cfg

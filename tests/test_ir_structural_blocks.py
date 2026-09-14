@@ -102,7 +102,7 @@ def test_block_round_trip() -> None:
     )
     ir = IR(pages=[page])
     d = to_dict(ir)
-    assert d["ir_version"] == "0.4"
+    assert d["ir_version"] == "0.5"
     # kind tag is preserved
     assert d["pages"][0]["blocks"][0]["kind"] == "TableBlock"
     # bbox is expanded

@@ -160,3 +160,20 @@ def test_route_is_the_gate(docx_path: Path, tmp_path: Path) -> None:
 def test_inspector_alias_is_path_to_ir_callable() -> None:
     """The seam contract: Inspector is a ``path -> IR`` callable type."""
     assert Inspector is not None
+
+
+# ---------------------------------------------------------------------------
+# Golden fixtures: the suite is self-sufficient on a clean machine (П6)
+# ---------------------------------------------------------------------------
+
+
+def test_golden_fixtures_committed() -> None:
+    """Hardening П6: the two single-page golden PDFs must be committed in
+    tests/fixtures so that CI (and any clone) runs the full fast+slow
+    matrix without an external corpus. big_test.pdf (21 MB) stays
+    external by design — it degrades to a graceful skip elsewhere."""
+    fixtures = Path(__file__).parent / "fixtures"
+    for rel in ("pdf/p5.pdf", "pdf/p27.pdf", "djvu/plain.djvu", "djvu/text_layer.djvu"):
+        p = fixtures / rel
+        assert p.exists(), f"golden fixture missing: {p} (suite is not self-sufficient)"
+        assert p.stat().st_size > 500, f"golden fixture looks truncated: {p}"

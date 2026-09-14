@@ -1,8 +1,10 @@
 [project]
 name = "pdf-router"
-version = "0.1.0"
+version = "0.5.0"
 description = "Ultra-minimal, deterministic, deploy-anywhere PDF to LLM-ready Markdown router"
 readme = "README.md"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "lineless-table-rec==0.1.0",
@@ -19,7 +21,11 @@ pdf-router = "pdf_router.cli:main"
 [project.optional-dependencies]
 tesseract = ["pytesseract>=0.3"]
 cloud = ["requests>=2.31"]
-dev = ["pytest>=8"]
+dev = [
+    "mypy>=1.13",
+    "pytest>=8",
+    "ruff>=0.9",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -33,3 +39,36 @@ testpaths = ["tests"]
 markers = [
     "slow: long-running OCR tests (~20s/page); deselect with -m 'not slow'",
 ]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors (incl. E501 line-too-long at 120)
+    "W",
+    "F",   # pyflakes
+    "B",   # bugbear
+    "RUF",
+]
+# RUF001/2/3 off: the corpus and its assertions are Russian; the
+# ambiguous-homoglyph warnings fire on every Cyrillic string.
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests: long docstring URLs / corpus paths and deliberate broad excepts are
+# fine; E501 stays off there to avoid churning corpus-anchored docstrings.
+"tests/*" = ["E501"]
+# Grouped, comment-sectioned `__all__` lists are intentional — do not
+# enforce isort ordering there.
+"src/pdf_router/__init__.py" = ["RUF022"]
+"src/pdf_router/api.py" = ["RUF022"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/pdf_router"]
+# Pragmatic baseline: every source file must type-check, third-party stubs
+# are not required (rapidocr/lineless/wired ship no py.typed).
+ignore_missing_imports = true
+check_untyped_defs = true

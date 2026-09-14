@@ -285,7 +285,7 @@ def to_dict(ir: IR, *, include_page_bbox: bool = False) -> dict[str, Any]:
             p.pop("page_bbox", None)
         # asdict leaves type-tag info out; re-tag by class identity (Python only)
         tagged: list[dict[str, Any]] = []
-        for i, b in enumerate(p.get("blocks", []) or []):
+        for b in p.get("blocks", []) or []:
             if isinstance(b, dict):
                 # already a dict (defensive); ensure kind present
                 b.setdefault("kind", _block_kind(b))

@@ -163,7 +163,7 @@ def test_pdf_inspector_paths_missing_section_raises(tmp_path):
         '[routing]\nocr_fallback_engine = "pdf_inspector_ocr"\n\n'
         '[ocr.pdf_inspector_ocr]\ndpi = 200.0\n'
     )
-    with pytest.raises(ConfigError, match="pdfium_lib_path.*ort_dylib_path"):
+    with pytest.raises(ConfigError, match=r"pdfium_lib_path.*ort_dylib_path"):
         RouterConfig.from_toml(cfg_file)
 
 

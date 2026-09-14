@@ -28,14 +28,13 @@ import pytest
 from pdf_router import core
 from pdf_router.adapters.djvu import (
     DjvuError,
-    djvu_info,
     djvu_page_count,
     djvu_page_texts,
     extract_ir,
     render_page_rgb_djvu,
 )
 from pdf_router.config import RouterConfig
-from pdf_router.formats import Format, UnsupportedFormatError, detect_format, route
+from pdf_router.formats import Format, detect_format, route
 from pdf_router.ir import IR_VERSION, SrcTool, from_dict, to_dict
 from pdf_router.ocr import OcrError, _ocr_pdf_inspector
 from pdf_router.rasterize import (
@@ -114,7 +113,6 @@ def test_inspector_rejects_truncated_djvu(tmp_path: Path) -> None:
 
 
 def test_ir04_roundtrip_preserves_djvu_provenance(text_layer_djvu: Path) -> None:
-    from pdf_router.ir import to_dict
 
     ir = extract_ir(str(text_layer_djvu))
     d = to_dict(ir)
@@ -279,7 +277,7 @@ def test_core_junky_layer_falls_back_to_ocr(
     monkeypatch.setattr(core, "ocr_page", _fake_ocr(calls))
     monkeypatch.setattr(core, "looks_like_text", lambda *a, **k: False)
     ir, report = core.process_pdf(str(text_layer_djvu), RouterConfig())
-    p0, p1 = ir.pages
+    p0, _p1 = ir.pages
     assert p0.ocr_reason == "low_text_quality"
     assert p0.markdown == "ocr text"
     assert p0.src_tool is SrcTool.RAPIDOCR
@@ -391,7 +389,7 @@ def test_real_ocr_on_corpus_anchor() -> None:
     if anchor is None:
         pytest.skip("corpus anchor not available")
     ocr = __import__("pdf_router.ocr", fromlist=["ocr_page"]).ocr_page
-    md1, engine1, blocks1 = ocr(str(anchor), 0, RouterConfig())
+    md1, engine1, _blocks1 = ocr(str(anchor), 0, RouterConfig())
     md2, engine2, _ = ocr(str(anchor), 0, RouterConfig())
     assert engine1 == engine2 == "rapidocr"
     assert md1.strip()

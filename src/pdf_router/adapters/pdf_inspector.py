@@ -54,33 +54,36 @@ def _parse_markdown_table(md: str) -> tuple[list[list[str]], int]:
     Returns ``([], 0)`` if ``md`` is not a table. ``header_rows`` is the number
     of leading rows above the separator; for our corpus that's usually 1.
 
-    Heuristic for header_rows beyond 1: rows whose every cell is short and
-    contains no digits are treated as headers. (Conservative; only fires when
-    a non-trivial number of header-looking rows precede a separator.)
+    Heuristic for ``header_rows == 2``: markdown allows only one header row,
+    so a two-line header surfaces its second line as the first *body* row.
+    When that row's every cell is short and digit-free, it is counted as the
+    header's continuation (it stays in ``rows`` in order — the count only
+    drives the header band in RAG chunk embeds). Conservative: fires only
+    when at least two candidate rows follow the separator.
     """
     lines = [ln for ln in md.splitlines() if ln.strip()]
-    if len(lines) < 2 or not _TABLE_ROW_RE.match(lines[0]) or not _TABLE_SEP_RE.match(lines[1]):
+    if (
+        len(lines) < 2
+        or not _TABLE_ROW_RE.match(lines[0])
+        or not _TABLE_SEP_RE.match(lines[1])
+    ):
         return [], 0
-    body_lines = [lines[0], lines[1]] + [ln for ln in lines[2:] if _TABLE_ROW_RE.match(ln)]
+    # Header + data rows in original order; the separator itself and any
+    # stray separator-like lines are not rows.
+    row_lines = [
+        lines[0],
+        *(
+            ln
+            for ln in lines[2:]
+            if _TABLE_ROW_RE.match(ln) and not _TABLE_SEP_RE.match(ln)
+        ),
+    ]
     header_rows = 1
-    # Look ahead: any extra rows above the next blank? Markdown only allows
-    # one header row by spec, so we keep header_rows=1 unless we can detect
-    # a multi-line header by consecutive short text rows.
-    if len(body_lines) >= 4:
-        second_row_cells = [c.strip() for c in body_lines[2].strip("|").split("|")]
-        if all(c and not any(ch.isdigit() for ch in c) and len(c) < 40 for c in second_row_cells):
-            header_rows = 2  # heuristic
-    rows: list[list[str]] = []
-    for ln in body_lines[2 if header_rows == 2 else 2 :]:
-        # keep both header (if header_rows==2) and data rows
-        cells = [c.strip() for c in ln.strip().strip("|").split("|")]
-        rows.append(cells)
-    if header_rows == 2:
-        # include second header row in rows
-        second = [c.strip() for c in body_lines[2].strip("|").split("|")]
-        rows.insert(0, second)
-    first_row_cells = [c.strip() for c in body_lines[0].strip("|").split("|")]
-    rows.insert(0, first_row_cells)
+    if len(row_lines) >= 3:
+        second_cells = [c.strip() for c in row_lines[1].strip("|").split("|")]
+        if all(c and not any(ch.isdigit() for ch in c) and len(c) < 40 for c in second_cells):
+            header_rows = 2  # wrapped second header line (heuristic)
+    rows = [[c.strip() for c in ln.strip().strip("|").split("|")] for ln in row_lines]
     return rows, header_rows
 
 
@@ -135,7 +138,7 @@ def _headings_from_textitems(text_items: list[Any], page_0indexed: int) -> list[
             by_line.setdefault(key, []).append(it)
     out: list[HeadingBlock] = []
     # sort by y descending (PDF y goes up)
-    for (sz, y), items in sorted(by_line.items(), key=lambda kv: -kv[0][1]):
+    for (sz, _y), items in sorted(by_line.items(), key=lambda kv: -kv[0][1]):
         items.sort(key=lambda it: it.x)
         text = " ".join(it.text.strip() for it in items).strip()
         if not text:

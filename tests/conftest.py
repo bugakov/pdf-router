@@ -1,4 +1,10 @@
-"""Shared fixtures: paths to the reference PDFs (read-only)."""
+"""Shared fixtures: golden fixtures committed in tests/fixtures.
+
+Committed fixtures (TKT hardening П6) make the suite self-sufficient —
+the whole fast+slow CI runs on a clean machine with no external corpus.
+``big_test_pdf`` (21 MB, mixed 44 pp) is too heavy to commit and keeps
+its external-corpus path with a graceful skip.
+"""
 
 from __future__ import annotations
 
@@ -8,11 +14,16 @@ from pathlib import Path
 
 import pytest
 
-PDF_DIR = Path("/home/scanum/parser_choose/pdf")
+PDF_DIR = Path("/home/scanum/parser_choose/pdf")  # external corpus, optional
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
 
 def _pdf(name: str) -> Path:
+    # Committed golden fixture first; fall back to the external corpus
+    # (dev machines may carry newer/rounder copies); skip if neither.
+    committed = FIXTURE_DIR / "pdf" / name
+    if committed.exists():
+        return committed
     p = PDF_DIR / name
     if not p.exists():
         pytest.skip(f"reference PDF not available: {p}")

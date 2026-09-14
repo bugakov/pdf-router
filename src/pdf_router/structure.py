@@ -190,7 +190,7 @@ def _heading_pass(ocr_result: list, table_bboxes: list[BBox], config: RouterConf
     small = float(config.structure.heading_small_ratio)
 
     out: list[HeadingBlock] = []
-    for (box, text), h in zip(items, heights):
+    for (box, text), h in zip(items, heights, strict=True):
         if h < median * small:
             continue
         if len(text) > _MAX_HEADING_CHARS:
@@ -213,7 +213,9 @@ def _heading_pass(ocr_result: list, table_bboxes: list[BBox], config: RouterConf
                 source="ocr_box_height",
             )
         )
-    out.sort(key=lambda hb: hb.bbox.y0)  # raster top-left origin: top first
+    # bbox is always set on ocr_box_height blocks today; the None-branch
+    # keeps mypy honest if _heading_pass ever grows a bboxless source.
+    out.sort(key=lambda hb: hb.bbox.y0 if hb.bbox else float("inf"))  # raster top-left origin: top first
     return out
 
 

@@ -195,7 +195,7 @@ def _parse_num(cell: str) -> float | None:
 
 def _fmt_num(x: float) -> str:
     if abs(x - round(x)) < 1e-9:
-        return str(int(round(x)))
+        return str(round(x))
     return f"{x:.2f}".rstrip("0").rstrip(".")
 
 
@@ -312,7 +312,7 @@ def _split_blocks(markdown: str) -> list[tuple[str | None, str]]:
         return []
 
     lines = markdown.splitlines()
-    blocks: list[tuple[str | None, list[str]]] = []
+    blocks: list[tuple[str | None, str]] = []
     current_section: str | None = None
     current_lines: list[str] = []
 
@@ -447,11 +447,11 @@ def _table_parts(
         groups = []
         current: list[list[str]] = []
         for row in data:
-            if current and _tokens(embed_of(current + [row])) > ccfg.max_tokens:
+            if current and _tokens(embed_of([*current, row])) > ccfg.max_tokens:
                 groups.append(current)
                 current = [row]
             else:
-                current = current + [row]
+                current = [*current, row]
         if current:
             groups.append(current)
 

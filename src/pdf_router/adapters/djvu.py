@@ -38,12 +38,12 @@ from pdf_router.ir import IR, Metadata, OcrReasonEntry, PageResult, SrcTool
 
 __all__ = [
     "DjvuError",
+    "djvu_info",
     "djvu_page_count",
     "djvu_page_texts",
     "djvu_stored_dpis",
-    "render_page_rgb_djvu",
     "extract_ir",
-    "djvu_info",
+    "render_page_rgb_djvu",
 ]
 
 

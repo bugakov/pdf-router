@@ -32,7 +32,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Deterministic PDF -> LLM-ready Markdown router.",
     )
     parser.add_argument("--version", action="version", version=f"pdf-router {__version__}")
-    parser.add_argument("--config", metavar="PATH", default=None, help="TOML config path (default: ./router.toml if present)")
+    parser.add_argument(
+        "--config",
+        metavar="PATH",
+        default=None,
+        help="TOML config path (default: ./router.toml if present)",
+    )
     parser.add_argument("--out", metavar="DIR", default=None, help="Output directory (default: out/)")
     parser.add_argument(
         "--render",
@@ -48,7 +53,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["debug", "info", "warning", "error"],
         help="Override [router].log_level",
     )
-    parser.add_argument("input", nargs="?", help="Input document path (format detected by content; PDF, DOCX and DJVU today)")
+    parser.add_argument(
+        "input",
+        nargs="?",
+        help="Input document path (format detected by content; PDF, DOCX and DJVU today)",
+    )
     return parser
 
 
@@ -128,7 +137,10 @@ def main(argv: list[str] | None = None) -> int:
     if enabled is not None:
         cfg.renderers.enabled = enabled
     log_level = (args.log_level or cfg.log_level).upper()
-    logging.basicConfig(level=getattr(logging, log_level, logging.WARNING), format="%(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=getattr(logging, log_level, logging.WARNING),
+        format="%(levelname)s %(name)s: %(message)s",
+    )
 
     # --info: one door (TKT-DX-06): PDFs go to the Rust classifier, docx
     # and djvu to their native inspectors' metadata summaries; other

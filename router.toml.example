@@ -63,9 +63,8 @@ log_level = "info"          # debug | info | warning | error; default "warning"
 #base_url = "https://api.novita.ai/openai"
 #model = "deepseek/deepseek-ocr-2"
 ## optional:
-## upload_url = "https://uguu.se/upload"     # default; 48h retention.
-##   catbox.moe is BLOCKED from this host (412 "Invalid uploader", IP-wide);
-##   if you switch, the adapter auto-detects field names per host.
+## Privacy (P5): the page PNG is sent inline as a base64 data-URL straight to
+##   base_url — no public file host, no third-party upload hop.
 ## prompt = "OCR this image."                # terse prompt; the markdown-style
 ##   prompt triggers repetition loops on dense drawing pages (live-tested).
 ## timeout = 60
@@ -129,8 +128,8 @@ log_level = "info"          # debug | info | warning | error; default "warning"
 #                      dpi, minimum_confidence, offline, model_cache_dir
 #   tesseract:         languages (required); bin, dpi
 #   glm_ocr:           api_key, base_url (required); model, timeout
-#   deepseek_ocr:      api_key, base_url (required); model, upload_url,
-#                      prompt, timeout, max_tokens, dpi
+#   deepseek_ocr:      api_key, base_url (required); model, prompt,
+#                      timeout, max_tokens, dpi
 
 # --- Post-OCR structure pass (IR 0.5, ADR-0005) ------------------------------
 # Every OCR'd page (scanned PDF or layerless djvu) grows real TableBlock /

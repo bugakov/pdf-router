@@ -33,6 +33,7 @@ fails a page whose OCR text is already good.
 
 from __future__ import annotations
 
+import base64
 import logging
 import threading
 from pathlib import Path
@@ -201,7 +202,10 @@ def _rapidocr_triples(result: Any) -> list:
     txts = [] if txts is None else list(txts)
     scores = [] if scores is None else list(scores)
     out: list = []
-    for box, text, score in zip(boxes, txts, scores):
+    # strict=False is deliberate: txts alone already built the flat markdown;
+    # misaligned/missing geometry is a structure-only loss (the same philosophy
+    # as the reshape guard below), never a page failure.
+    for box, text, score in zip(boxes, txts, scores, strict=False):
         try:
             quad = np.asarray(box, dtype=float).reshape(4, 2)
         except (TypeError, ValueError):
@@ -401,7 +405,7 @@ def _ocr_tesseract(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
     return text
 
 
-def _ocr_glm(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
+def _ocr_glm(pdf_path: str, page_idx: int, params: dict[str, Any]) -> tuple[str, Any]:
     """OCR via Z.ai GLM layout_parsing API.
 
     Renders the page to a single-page PDF (verbatim page extract for pdf,
@@ -469,14 +473,13 @@ def _ocr_glm(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
 def _ocr_deepseek(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
     """OCR via Novita AI deepseek-ocr-2.
 
-    Renders page to PNG (200 DPI, format-aware seam), uploads to uguu.se,
-    POSTs to OpenAI-compatible /chat/completions endpoint. Requires
+    Renders page to PNG (200 DPI, format-aware seam) and POSTs it as a
+    base64 data-URL **directly inside the chat/completions body** — same
+    pattern as ``_ocr_glm``. No public file host is involved; the page
+    travels only to the configured ``base_url`` (privacy: P5). Requires
     ``api_key`` in params.
 
     Empirical notes (live-tested 2026-08-26, from the retired adapter):
-    - catbox.moe blocks this host class with 412 "Invalid uploader" (IP-wide,
-      curl too); uguu.se verified working. Both response formats supported
-      (JSON ``files[].url`` and plain-text body).
     - Prompt "OCR this image." beats "Convert the document to markdown.":
       the markdown prompt triggers repetition loops (p27 → 447x "ПОВТОРА №"
       lines; the terse prompt gave clean output on the title page).
@@ -484,7 +487,6 @@ def _ocr_deepseek(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
     api_key = params.get("api_key")
     base_url = params.get("base_url", "https://api.novita.ai/openai")
     model = params.get("model", "deepseek/deepseek-ocr-2")
-    upload_url = params.get("upload_url", "https://uguu.se/upload")
     prompt = params.get("prompt", "OCR this image.")
     timeout = float(params.get("timeout", 60.0))
     max_tokens = int(params.get("max_tokens", 4096))
@@ -498,37 +500,9 @@ def _ocr_deepseek(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
     except Exception as exc:
         raise OcrError(f"requests not importable (install [cloud] extra): {exc}") from exc
 
-    # Render and upload.
+    # Render and inline as data-URL (no upload, no third-party host).
     png = rasterize_page(pdf_path, page_idx, dpi=dpi)
-    host = upload_url.lower()
-    if "uguu" in host:
-        files = {"files[]": ("page.png", png, "image/png")}
-        data = None
-    else:
-        files = {"fileToUpload": ("page.png", png, "image/png")}
-        data = {"reqtype": "fileupload"}
-
-    try:
-        r = requests.post(upload_url, data=data, files=files, timeout=timeout)
-        r.raise_for_status()
-    except Exception as exc:
-        raise OcrError(f"deepseek_ocr image upload failed: {exc}") from exc
-
-    # Parse upload response.
-    try:
-        payload = r.json()
-        uploaded = payload.get("files") or []
-        if uploaded and str(uploaded[0].get("url", "")).startswith("http"):
-            image_url = str(uploaded[0]["url"])
-        else:
-            raise OcrError("bad uguu.se response format")
-    except Exception:
-        # Fallback: plain-text URL.
-        url_text = r.text.strip().splitlines()[-1].strip()
-        if url_text.startswith("http"):
-            image_url = url_text
-        else:
-            raise OcrError(f"deepseek_ocr: bad upload response: {r.text[:200]!r}")
+    image_url = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
 
     # Chat completion.
     try:
@@ -611,13 +585,13 @@ def ocr_page(
         return md, engine, _boxless_blocks(md)
     elif engine == "glm_ocr":
         md, layout = _ocr_glm(pdf_path, page_idx, params)
-        blocks: list = []
+        glm_blocks: list = []
         if layout:
             try:
-                blocks = blocks_from_glm(layout)
+                glm_blocks = blocks_from_glm(layout)
             except Exception as exc:
                 logger.warning("glm layout_details -> blocks failed: %s", exc)
-        return md, engine, blocks
+        return md, engine, glm_blocks
     elif engine == "deepseek_ocr":
         md = _ocr_deepseek(pdf_path, page_idx, params)
         return md, engine, _boxless_blocks(md)

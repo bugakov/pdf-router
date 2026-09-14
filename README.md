@@ -12,7 +12,7 @@ chunks, and a serialized IR (dataclass → JSON).
 uv sync                       # core only (pdf-inspector + pymupdf)
 uv sync --extra tesseract     # local tesseract OCR
 uv sync --extra cloud         # cloud OCR (glm-ocr, deepseek-ocr)
-uv sync --extra dev           # pytest
+uv sync --extra dev           # pytest + ruff + mypy (lint/types/CI gate)
 ```
 
 Requires Python ≥ 3.12 and the [pdf-inspector](https://github.com/firecrawl/pdf-inspector)
@@ -114,6 +114,22 @@ never writes `os.environ` — call `pdf_router.wire_pdf_inspector_env(config)`
 once after loading the config (the CLI does this for you). It bridges the
 `[ocr.pdf_inspector_ocr]` TOML section into the env, warns on stale
 mismatches, and is a no-op for every other engine.
+
+## Privacy: cloud OCR engines
+
+The two opt-in cloud engines differ in where page images travel:
+
+- **`glm_ocr` (Z.ai)** — the page leaves as a base64 data-URL **directly to
+  the configured API endpoint**. No third-party file host is involved.
+- **`deepseek_ocr` (Novita AI)** — the page PNG is posted **directly inside
+  the chat-completions request** as a base64 data-URL (same pattern as
+  glm_ocr). No public file host is involved.
+
+Neither engine uploads page images to any public file-hosting service; the
+router's own history of routing `deepseek_ocr` through uguu.se is retired.
+Still, using either cloud engine means the page content leaves your
+machine for the engine's operator — for sensitive corpora, keep the
+default local engines (`rapidocr`, `tesseract`, `pdf_inspector_ocr`).
 
 ## Configuration
 
@@ -317,4 +333,8 @@ docs/
 
 ## License
 
-TBD.
+[AGPL-3.0-only](LICENSE) — same as the OCR stack this router builds on
+(lineless-table-rec / wired-table-rec are DocLayout-YOLO-family AGPL
+projects). Embedding pdf-router into a network service triggers AGPL §13:
+your users are entitled to the Corresponding Source of the combined
+service. For internal, non-distributed deployments this changes nothing.

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from pdf_router.adapters.pdf_inspector import extract_ir
+from pdf_router.adapters.pdf_inspector import _parse_markdown_table, extract_ir
 from pdf_router.ir import HeadingBlock, TableBlock
 
 
@@ -79,6 +79,57 @@ def test_structural_blocks_tkp1() -> None:
     # L2: at least one heading text is non-empty and non-numeric-only
     real = [h for h in all_headings if h.text and not h.text.strip().isdigit()]
     assert real, "expected at least one non-numeric heading (excludes page-number false positives)"
+
+
+# --- Table parser: header-row heuristic (regression: duplicated header line) --
+
+
+def test_parse_markdown_table_single_header() -> None:
+    """Plain 1-line markdown header: header + body rows, no duplication."""
+    rows, hdr = _parse_markdown_table(
+        "| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |"
+    )
+    assert hdr == 1
+    assert rows == [["A", "B"], ["1", "2"], ["3", "4"]]
+
+
+def test_parse_markdown_table_two_line_header_no_duplicate() -> None:
+    """Two-line wrapped header: second line counted, but NOT duplicated.
+
+    Regression guard for the hardening pass: the old implementation fed the
+    second header line into ``rows`` twice (loop + ``rows.insert(0, ...)``).
+    """
+    rows, hdr = _parse_markdown_table(
+        "| A | B |\n|---|---|\n| Голова | Шапка |\n| 1 | 2 |\n| 3 | 4 |"
+    )
+    assert hdr == 2
+    assert rows == [["A", "B"], ["Голова", "Шапка"], ["1", "2"], ["3", "4"]]
+
+
+def test_parse_markdown_table_text_body_not_header() -> None:
+    """Conservative guard: a lone body row never triggers the 2-line heuristic.
+
+    The heuristic (a text-only row right after the separator = wrapped header)
+    fires only when at least two body rows follow the separator.
+    """
+    rows, hdr = _parse_markdown_table("| A | B |\n|---|---|\n| Голова | Шапка |")
+    assert hdr == 1
+    assert rows == [["A", "B"], ["Голова", "Шапка"]]
+    # ...but with >= 2 body rows the documented heuristic fires (by design).
+    rows2, hdr2 = _parse_markdown_table(
+        "| A | B |\n|---|---|\n| Голова | Шапка |\n| 1 | 2 |"
+    )
+    assert hdr2 == 2
+    assert rows2 == [["A", "B"], ["Голова", "Шапка"], ["1", "2"]]
+
+
+def test_parse_markdown_table_rejects_garbage() -> None:
+    """Non-table input returns ([], 0); separators never become rows."""
+    assert _parse_markdown_table("plain text") == ([], 0)
+    assert _parse_markdown_table("| A | B |\nno separator\n| 1 | 2 |") == ([], 0)
+    rows, hdr = _parse_markdown_table("| A | B |\n|---|---|\n|---|---|\n| 1 | 2 |")
+    assert hdr == 1
+    assert rows == [["A", "B"], ["1", "2"]]
 
 
 # --- IR round-trip with blocks ----------------------------------------------

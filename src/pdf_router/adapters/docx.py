@@ -34,6 +34,7 @@ from xml.etree import ElementTree as ET
 
 from pdf_router.ir import (
     FigureBlock,
+    FormulaBlock,
     HeadingBlock,
     IR,
     Metadata,
@@ -357,7 +358,7 @@ def _walk_blocks(
     rels: dict[str, str],
     target_to_index: dict[str, int],
     md_parts: list[str],
-    blocks: list[HeadingBlock | TableBlock | FigureBlock],
+    blocks: list[HeadingBlock | TableBlock | FigureBlock | FormulaBlock],
     paragraphs: list[str],
 ) -> int:
     """Emit markdown chunks + structural blocks for body-level elements.
@@ -470,7 +471,7 @@ def _core_title(zf: zipfile.ZipFile) -> str | None:
     if root is None:
         return None
     title = root.find(f"{{{_DC}}}title")
-    if title is not None and (title.text or "").strip():
+    if title is not None and title.text and title.text.strip():
         return title.text.strip()
     return None
 
@@ -505,7 +506,7 @@ def extract_ir(path: str) -> IR:
         target_to_index = {t: i for i, t in enumerate(image_targets)}
 
         md_parts: list[str] = []
-        blocks: list[HeadingBlock | TableBlock | FigureBlock] = []
+        blocks: list[HeadingBlock | TableBlock | FigureBlock | FormulaBlock] = []
         paragraphs: list[str] = []
         tables = _walk_blocks(
             list(body),

@@ -7,10 +7,9 @@ TKT-RT-14); they pin the same wire contracts against ``_ocr_glm`` /
 
 - GLM: ``{base_url}/layout_parsing``, ``model=glm-ocr``, base64 data-URL
   ``file``, markdown from ``md_results``, empty → OcrError.
-- deepseek: two POSTs (image upload, then chat/completions); uguu-style
-  hosts take ``files[]`` with no form data, catbox-style hosts take
-  ``fileToUpload`` + ``reqtype`` and answer with a plain-text URL;
-  empty content → OcrError.
+- deepseek: single POST to chat/completions with the page as a base64
+  data-URL inline (P5 privacy rewrite — the retired uguu.se upload hop is
+  gone); empty content → OcrError.
 """
 
 from __future__ import annotations
@@ -84,51 +83,46 @@ def test_deepseek_missing_api_key_raises() -> None:
 
 @needs_requests
 def test_deepseek_ocr_page_mocked(p27_pdf) -> None:
-    # default host is uguu.se: JSON body {"files": [{"url": ...}]}
-    upload_resp = _resp(json_data={"success": True, "files": [{"url": "https://h.uguu.se/abc123.png"}]})
     chat_resp = _resp(json_data={"choices": [{"message": {"content": "# OCR via deepseek"}}]})
 
-    with mock.patch("requests.post", side_effect=[upload_resp, chat_resp]) as post:
+    with mock.patch("requests.post", return_value=chat_resp) as post:
         md = _ocr_deepseek(
             str(p27_pdf), 0, {"api_key": "sk-test", "base_url": "https://x"}
         )
 
     assert md == "# OCR via deepseek"
-    # uguu.se requires the "files[]" field name and no extra form data
-    up_files = post.call_args_list[0].kwargs["files"]
-    assert "files[]" in up_files
-    assert post.call_args_list[0].kwargs.get("data") is None
+    # Single POST straight to chat/completions; page travels inline as a
+    # PNG data-URL — no image-upload hop, no public file host (P5).
+    url = post.call_args.args[0]
+    body = post.call_args.kwargs["json"]
+    assert url.endswith("/chat/completions")
+    parts = body["messages"][0]["content"]
+    assert parts[0]["type"] == "image_url"
+    assert parts[0]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert parts[1] == {"type": "text", "text": "OCR this image."}
 
 
 @needs_requests
-def test_deepseek_upload_plain_text_host(p27_pdf) -> None:
-    """catbox-style hosts answer with a bare URL in the body."""
-    upload_resp = _resp(
-        text="https://files.catbox.moe/abc123.png\n",
-        json_error=True,
-    )
+def test_deepseek_dpi_param_controls_raster_size(p27_pdf) -> None:
+    """The dpi param flows through to rasterize_page (rasterize seam)."""
     chat_resp = _resp(json_data={"choices": [{"message": {"content": "ok"}}]})
 
-    with mock.patch("requests.post", side_effect=[upload_resp, chat_resp]) as post:
-        md = _ocr_deepseek(
-            str(p27_pdf),
-            0,
-            {"api_key": "sk-test", "upload_url": "https://catbox.moe/user/api.php"},
-        )
+    with (
+        mock.patch("requests.post", return_value=chat_resp),
+        mock.patch(
+            "pdf_router.ocr.rasterize_page", return_value=b"fakepng"
+        ) as raster,
+    ):
+        _ocr_deepseek(str(p27_pdf), 0, {"api_key": "sk-test", "dpi": 300})
 
-    assert md == "ok"
-    # catbox-style: fileToUpload field + reqtype form data
-    up_files = post.call_args_list[0].kwargs["files"]
-    assert "fileToUpload" in up_files
-    assert post.call_args_list[0].kwargs["data"] == {"reqtype": "fileupload"}
+    assert raster.call_args.kwargs["dpi"] == 300
 
 
 @needs_requests
 def test_deepseek_empty_content_raises(p27_pdf) -> None:
-    upload_resp = _resp(json_data={"files": [{"url": "https://h.uguu.se/abc123.png"}]})
     chat_resp = _resp(json_data={"choices": [{"message": {"content": ""}}]})
 
-    with mock.patch("requests.post", side_effect=[upload_resp, chat_resp]):
+    with mock.patch("requests.post", return_value=chat_resp):
         with pytest.raises(OcrError, match="empty content"):
             _ocr_deepseek(str(p27_pdf), 0, {"api_key": "sk-test"})
 

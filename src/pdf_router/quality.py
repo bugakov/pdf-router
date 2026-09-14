@@ -6,7 +6,6 @@ All functions are pure (no IO).
 
 from __future__ import annotations
 
-import re
 
 
 def looks_like_text(

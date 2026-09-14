@@ -7,9 +7,8 @@ from pdf_router.ir import SrcTool
 def test_adapter_available() -> None:
     try:
         import pdf_inspector  # noqa: F401
-        assert True
-    except ImportError:
-        assert False, "pdf_inspector not importable"
+    except ImportError as exc:
+        raise AssertionError("pdf_inspector not importable") from exc
 
 
 def test_p5_properties_and_anchors(p5_pdf) -> None:

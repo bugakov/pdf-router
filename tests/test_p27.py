@@ -7,11 +7,22 @@ v0.3 changes:
 - report is returned directly, not via router.last_report.
 """
 
+from pathlib import Path
+
 import pytest
 
 from pdf_router.config import RouterConfig
 from pdf_router.core import process_pdf
 from pdf_router.ir import SrcTool
+
+# .runtime lives at the repo root — resolve relative to this file so the
+# slow test works on any machine (dev checkout or CI runner).
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+PDFIUM_LIB = str(_REPO_ROOT / ".runtime" / "lib" / "libpdfium.so")
+ORT_DYLIB = str(
+    _REPO_ROOT / ".runtime" / "onnxruntime-linux-x64-1.27.0" / "lib"
+    / "libonnxruntime.so"
+)
 
 
 @pytest.mark.slow
@@ -70,11 +81,8 @@ def test_p27_with_pdf_inspector_ocr(p27_pdf, monkeypatch) -> None:
     config = RouterConfig()
     config.routing.ocr_fallback_engine = "pdf_inspector_ocr"
     config.ocr_engines["pdf_inspector_ocr"] = {
-        "pdfium_lib_path": "/home/scanum/pdf-router/.runtime/lib/libpdfium.so",
-        "ort_dylib_path": (
-            "/home/scanum/pdf-router/.runtime/onnxruntime-linux-x64-1.27.0/"
-            "lib/libonnxruntime.so"
-        ),
+        "pdfium_lib_path": PDFIUM_LIB,
+        "ort_dylib_path": ORT_DYLIB,
     }
     # wire sets these; register undo first so the leak does not outlive the test.
     monkeypatch.delenv("PDFIUM_LIB_PATH", raising=False)

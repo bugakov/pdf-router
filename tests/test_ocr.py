@@ -12,6 +12,7 @@ from __future__ import annotations
 import inspect
 import subprocess
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -21,10 +22,11 @@ from pdf_router.ocr import OcrError, _ocr_pdf_inspector, ocr_page
 
 # Real runtime paths exist in the env (libpdfium.so + libonnxruntime.so).
 # Used as monkeypatched env values so the binary-presence guard passes.
-RUNTIME_PDFIUM = "/home/scanum/pdf-router/.runtime/lib/libpdfium.so"
-RUNTIME_ORT = (
-    "/home/scanum/pdf-router/.runtime/onnxruntime-linux-x64-1.27.0/lib/"
-    "libonnxruntime.so"
+# Repo-relative so the suite runs on any checkout (dev box and CI alike).
+_RUNTIME_DIR = Path(__file__).resolve().parents[1] / ".runtime"
+RUNTIME_PDFIUM = str(_RUNTIME_DIR / "lib" / "libpdfium.so")
+RUNTIME_ORT = str(
+    _RUNTIME_DIR / "onnxruntime-linux-x64-1.27.0" / "lib" / "libonnxruntime.so"
 )
 
 

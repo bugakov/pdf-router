@@ -17,6 +17,24 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Install system tools (djvulibre)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q djvulibre-bin
+
+      - name: Provision .runtime (pdfium + onnxruntime)
+        run: |
+          mkdir -p .runtime
+          # pdfium: same build as the dev .runtime (see .runtime/PROVENANCE.json),
+          # pinned by sha256 so CI and dev machines run identical binaries.
+          curl -fsSL --retry 3 -o /tmp/pdfium.tgz \
+            https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7988/pdfium-linux-x64.tgz
+          echo "7358c15e26a746cd67854887ea11b3b807c436056788eee9294fb972b8f8e0be  /tmp/pdfium.tgz" | sha256sum -c -
+          tar -xzf /tmp/pdfium.tgz -C .runtime
+          curl -fsSL --retry 3 -o /tmp/ort.tgz \
+            https://github.com/microsoft/onnxruntime/releases/download/v1.27.0/onnxruntime-linux-x64-1.27.0.tgz
+          tar -xzf /tmp/ort.tgz -C .runtime
+
       - name: Install project + dev tools
         run: uv sync --extra dev --locked
 

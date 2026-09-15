@@ -17,6 +17,10 @@ Engines supported:
 - ``glm_ocr`` — Z.ai layout_parsing API, requires api_key.
 - ``deepseek_ocr`` — Novita AI deepseek-ocr-2, requires api_key.
 
+Cloud engines retry transient HTTP failures (429/5xx, network) with
+exponential backoff — ``max_retries`` (default 2, 0 disables) and
+``retry_backoff_s`` (default 1.0) in their ``[ocr.*]`` sections.
+
 All engines acquire page rasters through :mod:`pdf_router.rasterize`
 (the format-aware seam, ADR-0004): pdf -> pymupdf, djvu -> ddjvu. Engine
 signatures keep ``(path, page_idx)``; the format dispatch lives below
@@ -35,7 +39,9 @@ from __future__ import annotations
 
 import base64
 import logging
+import random
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +63,82 @@ class OcrError(RuntimeError):
 def _lookup_params(config: RouterConfig, engine: str) -> dict[str, Any]:
     """Params for ``engine``: the matching ``[ocr.<engine>]`` section."""
     return dict(config.ocr_engines.get(engine, {}))
+
+
+# Transient-by-nature HTTP statuses worth a retry: rate limiting and the
+# classic bad-gateway/server-blip family. Everything else (401 bad key,
+# 400 bad request, 422) is deterministic — a repeat buys the same answer
+# for the same money and the same latency.
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+
+
+def _post_with_retry(
+    url: str,
+    *,
+    json: dict,
+    headers: dict,
+    timeout: float,
+    max_retries: int = 2,
+    backoff_s: float = 1.0,
+) -> Any:
+    """POST with exponential backoff on transient failures (cloud engines).
+
+    Retries: 429/500/502/503/504 and network errors (ConnectionError,
+    Timeout) — up to ``max_retries`` extra attempts with delay
+    ``backoff_s * 2**attempt`` + uniform jitter (two workers must not
+    wake in lockstep and re-collide). A provider ``Retry-After`` header
+    (integer seconds) wins over our own backoff. Deterministic 4xx fails
+    on the first attempt.
+
+    On exhaustion the LAST response/exception is returned/raised — the
+    caller's ``raise_for_status()``/wrap keeps the error message
+    truthful about the final attempt. Each attempt carries its own
+    ``timeout`` (the per-call cap from ``[ocr.*].timeout``), so the
+    worst-case page latency is ``(max_retries + 1) * timeout`` plus
+    backoff — bounded, as opposed to a lost page or a hung worker.
+
+    Known honest trade-off (glm): a coding-plan key gets 429 "Insufficient
+    balance" — a permanent cause behind a transient code. Retrying wastes
+    a couple of short attempts, but the final OcrError carries the body,
+    so the real cause still surfaces. Rate limiting, the far more common
+    429, is genuinely transient — retrying it is the point.
+    """
+    import requests
+
+    for attempt in range(max_retries + 1):
+        net_exc: Exception | None = None
+        try:
+            r = requests.post(url, json=json, headers=headers, timeout=timeout)
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            net_exc = exc
+        else:
+            if r.status_code not in _RETRYABLE_STATUS:
+                return r  # final answer: success or deterministic failure
+        if attempt == max_retries:
+            if net_exc is not None:
+                raise net_exc  # caller wraps it — message stays the last one
+            return r  # caller's raise_for_status() turns it into the error
+
+        # Own backoff + jitter; provider hint (integer seconds) overrides.
+        delay = backoff_s * (2**attempt) + random.uniform(0.0, 0.5)
+        retry_after: float | None = None
+        if net_exc is None:
+            raw = r.headers.get("Retry-After")
+            if raw is not None:
+                try:
+                    retry_after = float(raw)
+                except ValueError:
+                    retry_after = None  # HTTP-date form: ignored
+        wait = retry_after if retry_after is not None else delay
+        logger.warning(
+            "OCR request failed (attempt %d/%d): %s — retrying in %.1fs",
+            attempt + 1,
+            max_retries + 1,
+            f"HTTP {r.status_code}" if net_exc is None else type(net_exc).__name__,
+            wait,
+        )
+        time.sleep(wait)
+    raise AssertionError("unreachable: retry loop returns or raises inside")
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +458,12 @@ def _ocr_tesseract(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
 
     Renders page to PNG via ``rasterize_page`` (format-aware seam, 200 DPI).
     Requires ``tesseract`` binary; ``languages`` defaults to ``eng``.
+
+    ``timeout`` (default 300 s) caps one tesseract invocation. A hung tesseract
+    on a pathological page must fail that page loudly (OcrError → page.error →
+    exit 2), not wedge the worker thread forever — the ThreadPoolExecutor in
+    core waits for every future, so one hang would stall the whole run with
+    no error surfaced anywhere.
     """
     import shutil
     import subprocess
@@ -384,16 +472,23 @@ def _ocr_tesseract(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
     languages = params.get("languages") or ["eng"]
     lang_str = "+".join(languages) if isinstance(languages, list) else str(languages)
     dpi = int(params.get("dpi", 200))
+    timeout = float(params.get("timeout", 300.0))
 
     if shutil.which(bin_name) is None:
         raise OcrError(f"tesseract binary not found: {bin_name}")
 
     png = rasterize_page(pdf_path, page_idx, dpi=dpi)
-    proc = subprocess.run(
-        [bin_name, "stdin", "stdout", "-l", lang_str, "--dpi", str(dpi)],
-        input=png,
-        capture_output=True,
-    )
+    try:
+        proc = subprocess.run(
+            [bin_name, "stdin", "stdout", "-l", lang_str, "--dpi", str(dpi)],
+            input=png,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise OcrError(
+            f"page {page_idx + 1}: tesseract timed out after {timeout:g}s"
+        ) from exc
     if proc.returncode != 0:
         raise OcrError(
             f"tesseract exited {proc.returncode}: "
@@ -415,6 +510,11 @@ def _ocr_glm(pdf_path: str, page_idx: int, params: dict[str, Any]) -> tuple[str,
     :func:`pdf_router.structure.blocks_from_glm`).
     Requires ``api_key`` in params; ``base_url`` defaults to Z.ai endpoint.
 
+    Transient failures (429/5xx, network) are retried ``max_retries``
+    times (default 2) with exponential backoff (``retry_backoff_s``,
+    default 1.0) plus jitter; ``Retry-After`` wins when larger.
+    Deterministic 4xx (bad key, bad request) fail on the first attempt.
+
     Empirical notes (live-tested 2026-08-27, from the retired adapter):
     - A **coding-plan key** gets 429 "Insufficient balance" on the standard
       endpoint — document parsing is billed separately. Use a key with the
@@ -435,7 +535,7 @@ def _ocr_glm(pdf_path: str, page_idx: int, params: dict[str, Any]) -> tuple[str,
         raise OcrError("glm_ocr requires api_key")
 
     try:
-        import requests
+        import requests  # noqa: F401 — availability guard; _post_with_retry imports its own
     except Exception as exc:
         raise OcrError(f"requests not importable (install [cloud] extra): {exc}") from exc
 
@@ -447,8 +547,11 @@ def _ocr_glm(pdf_path: str, page_idx: int, params: dict[str, Any]) -> tuple[str,
 
     data_url = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode("ascii")
 
+    max_retries = int(params.get("max_retries", 2))
+    backoff_s = float(params.get("retry_backoff_s", 1.0))
+
     try:
-        r = requests.post(
+        r = _post_with_retry(
             f"{base_url.rstrip('/')}/layout_parsing",
             json={"model": model, "file": data_url},
             headers={
@@ -456,6 +559,8 @@ def _ocr_glm(pdf_path: str, page_idx: int, params: dict[str, Any]) -> tuple[str,
                 "Authorization": f"Bearer {api_key}",
             },
             timeout=timeout,
+            max_retries=max_retries,
+            backoff_s=backoff_s,
         )
         r.raise_for_status()
     except Exception as exc:
@@ -477,7 +582,8 @@ def _ocr_deepseek(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
     base64 data-URL **directly inside the chat/completions body** — same
     pattern as ``_ocr_glm``. No public file host is involved; the page
     travels only to the configured ``base_url`` (privacy: P5). Requires
-    ``api_key`` in params.
+    ``api_key`` in params. Retry policy: same as :func:`_ocr_glm` —
+    ``max_retries`` (default 2) with ``retry_backoff_s`` (default 1.0).
 
     Empirical notes (live-tested 2026-08-26, from the retired adapter):
     - Prompt "OCR this image." beats "Convert the document to markdown.":
@@ -496,7 +602,7 @@ def _ocr_deepseek(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
         raise OcrError("deepseek_ocr requires api_key")
 
     try:
-        import requests
+        import requests  # noqa: F401 — availability guard; _post_with_retry imports its own
     except Exception as exc:
         raise OcrError(f"requests not importable (install [cloud] extra): {exc}") from exc
 
@@ -504,9 +610,12 @@ def _ocr_deepseek(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
     png = rasterize_page(pdf_path, page_idx, dpi=dpi)
     image_url = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
 
+    max_retries = int(params.get("max_retries", 2))
+    backoff_s = float(params.get("retry_backoff_s", 1.0))
+
     # Chat completion.
     try:
-        r = requests.post(
+        r = _post_with_retry(
             f"{base_url.rstrip('/')}/chat/completions",
             json={
                 "model": model,
@@ -525,6 +634,8 @@ def _ocr_deepseek(pdf_path: str, page_idx: int, params: dict[str, Any]) -> str:
             },
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
             timeout=timeout,
+            max_retries=max_retries,
+            backoff_s=backoff_s,
         )
         r.raise_for_status()
     except Exception as exc:

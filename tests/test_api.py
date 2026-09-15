@@ -345,7 +345,11 @@ def test_strict_raises_when_pages_failed(p5_pdf: Path, monkeypatch: pytest.Monke
     report.pages_failed = 1  # simulate a partial failure as core would record it
 
     def fake_pipeline(
-        path: str, cfg: RouterConfig, *, output_dir: Path | None = None
+        path: str,
+        cfg: RouterConfig,
+        *,
+        output_dir: Path | None = None,
+        progress: object = None,
     ) -> tuple[IR, ProcessingReport]:
         return real_ir, report
 

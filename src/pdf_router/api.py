@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 from pdf_router.config import (
@@ -54,7 +55,12 @@ from pdf_router.config import (
     RendererConfig,
     RouterConfig,
 )
-from pdf_router.core import ProcessingReport, process_pdf as _pipeline
+from pdf_router.core import (
+    PipelineCancelled,
+    ProcessingReport,
+    ProgressEvent,
+    process_pdf as _pipeline,
+)
 from pdf_router.formats import UnsupportedFormatError
 from pdf_router.ir import (
     IR,
@@ -70,8 +76,10 @@ logger = logging.getLogger("pdf_router")
 
 __all__ = [
     "ConfigError",
+    "PipelineCancelled",
     "ProcessingError",
     "ProcessingReport",
+    "ProgressEvent",
     "UnsupportedFormatError",
     "convert",
     "load_config",
@@ -212,6 +220,7 @@ def process_pdf(
     config: str | Path | RouterConfig | None = None,
     output_dir: str | Path | None = None,
     strict: bool = False,
+    progress: "Callable[[ProgressEvent], None] | None" = None,
 ) -> tuple[IR, ProcessingReport]:
     """Run the full routing pipeline. Returns ``(IR, ProcessingReport)``.
 
@@ -231,16 +240,26 @@ def process_pdf(
         strict: raise :class:`ProcessingError` if any page failed. Default
             ``False`` reproduces the CLI's best-effort behaviour: failed pages
             carry ``PageResult.error`` and the rest of the document is fine.
+        progress: optional callback invoked after each page is finalized,
+            in document order, on the calling thread — no thread-safety
+            required. Raising :class:`PipelineCancelled` inside it is the
+            sanctioned cancel protocol: the run stops cleanly (pages already
+            done keep their results, never-started pages get
+            ``error="cancelled"`` and count into ``report.pages_cancelled``
+            and ``pages_failed``). Any other exception is treated as a bug
+            in the caller's code: logged with traceback, counted in
+            ``report.progress_callback_errors``, never fatal.
 
     Raises:
         ConfigError: bad ``config``.
         UnsupportedFormatError: the input is not a routable document
             (checked before any page work).
-        ProcessingError: ``strict=True`` and >=1 page failed.
+        ProcessingError: ``strict=True`` and >=1 page failed — note that
+            cancelled pages count as failed.
     """
     cfg = _coerce_config(config)
     out_dir = Path(output_dir) if output_dir is not None else None
-    ir, report = _pipeline(str(pdf_path), cfg, output_dir=out_dir)
+    ir, report = _pipeline(str(pdf_path), cfg, output_dir=out_dir, progress=progress)
     if strict and report.pages_failed:
         raise ProcessingError(report)
     return ir, report
@@ -251,6 +270,7 @@ def convert(
     *,
     config: str | Path | RouterConfig | None = None,
     strict: bool = False,
+    progress: "Callable[[ProgressEvent], None] | None" = None,
 ) -> str:
     """Convert a PDF to LLM-ready Markdown in one call.
 
@@ -270,9 +290,13 @@ def convert(
             (checked before any page work).
         ProcessingError: ``strict=True`` and >=1 page failed. Without
             ``strict``, a failed page simply contributes an empty section.
+
+    ``progress=`` is the streaming callback described in :func:`process_pdf`
+    (including the :class:`PipelineCancelled` cancel protocol); it is
+    forwarded verbatim.
     """
     cfg = _coerce_config(config)
-    ir, _ = process_pdf(pdf_path, config=cfg, strict=strict)
+    ir, _ = process_pdf(pdf_path, config=cfg, strict=strict, progress=progress)
     return render_markdown(ir, config=cfg)
 
 

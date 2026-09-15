@@ -10,6 +10,10 @@ TKT-RT-14); they pin the same wire contracts against ``_ocr_glm`` /
 - deepseek: single POST to chat/completions with the page as a base64
   data-URL inline (P5 privacy rewrite — the retired uguu.se upload hop is
   gone); empty content → OcrError.
+- retry/backoff: both engines POST through ``_post_with_retry`` —
+  transient 429/5xx/network errors are retried with exponential backoff
+  + jitter, ``Retry-After`` wins, deterministic 4xx never retry,
+  ``max_retries=0`` restores the old single-attempt behavior.
 """
 
 from __future__ import annotations
@@ -19,7 +23,13 @@ from unittest import mock
 
 import pytest
 
-from pdf_router.ocr import OcrError, _ocr_deepseek, _ocr_glm, _ocr_tesseract
+from pdf_router.ocr import (
+    OcrError,
+    _ocr_deepseek,
+    _ocr_glm,
+    _ocr_tesseract,
+    _post_with_retry,
+)
 
 _REQUESTS_AVAILABLE = importlib.util.find_spec("requests") is not None
 needs_requests = pytest.mark.skipif(
@@ -134,3 +144,187 @@ def test_tesseract_missing_binary_raises() -> None:
     """Flat engine raises OcrError when the binary is absent (no slow OCR)."""
     with pytest.raises(OcrError, match="tesseract binary not found"):
         _ocr_tesseract("/tmp/x.pdf", 0, {"bin": "definitely-not-tesseract-xyz"})
+
+
+def test_tesseract_timeout_param_reaches_subprocess(p27_pdf) -> None:
+    """``timeout`` flows from params into subprocess.run; a hang surfaces
+    as OcrError (→ page.error → exit 2), never a wedged worker thread."""
+    import subprocess
+    from unittest import mock
+
+    captured: dict = {}
+
+    def _fake_run(cmd, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout"))
+
+    with (
+        mock.patch("shutil.which", return_value="/usr/bin/tesseract"),
+        mock.patch(
+            "pdf_router.ocr.rasterize_page", return_value=b"fakepng"
+        ),
+        mock.patch("subprocess.run", side_effect=_fake_run),
+    ):
+        with pytest.raises(OcrError, match="timed out after 7"):
+            _ocr_tesseract(str(p27_pdf), 0, {"timeout": 7})
+
+    assert captured["timeout"] == 7
+
+
+# --- retry/backoff (_post_with_retry) -------------------------------------------
+
+
+def _status_resp(code: int, headers: dict | None = None):
+    r = mock.Mock()
+    r.status_code = code
+    r.headers = headers or {}
+    r.text = f"body {code}"
+    return r
+
+
+@needs_requests
+def test_retry_recovers_from_transient_5xx() -> None:
+    """500 → 502 → 200: the third attempt wins; pauses grow exponentially
+    (base 1.0 * 2**attempt + jitter < 0.5)."""
+    ok = _status_resp(200)
+    sleeps: list[float] = []
+
+    with (
+        mock.patch("requests.post", side_effect=[_status_resp(500), _status_resp(502), ok]) as post,
+        mock.patch("pdf_router.ocr.time.sleep", side_effect=sleeps.append),
+    ):
+        r = _post_with_retry("https://x/api", json={}, headers={}, timeout=1.0)
+
+    assert r is ok
+    assert post.call_count == 3
+    assert len(sleeps) == 2
+    assert 1.0 <= sleeps[0] <= 1.5  # 2**0 * 1.0 + jitter
+    assert 2.0 <= sleeps[1] <= 2.5  # 2**1 * 1.0 + jitter
+
+
+@needs_requests
+def test_retry_never_retries_deterministic_4xx() -> None:
+    """A 400 answer is final on the first attempt — no sleeps, no repeats."""
+    bad = _status_resp(400)
+
+    with (
+        mock.patch("requests.post", return_value=bad) as post,
+        mock.patch("pdf_router.ocr.time.sleep") as sleep,
+    ):
+        r = _post_with_retry("https://x/api", json={}, headers={}, timeout=1.0)
+
+    assert r is bad
+    assert post.call_count == 1
+    sleep.assert_not_called()
+
+
+@needs_requests
+def test_retry_recovers_from_network_error() -> None:
+    """ConnectionError, then success: retried like a transient status."""
+    import requests
+
+    ok = _status_resp(200)
+
+    with (
+        mock.patch("requests.post", side_effect=[requests.ConnectionError("boom"), ok]),
+        mock.patch("pdf_router.ocr.time.sleep") as sleep,
+    ):
+        r = _post_with_retry("https://x/api", json={}, headers={}, timeout=1.0)
+
+    assert r is ok
+    sleep.assert_called_once()
+
+
+@needs_requests
+def test_retry_exhaustion_on_status_returns_last_response() -> None:
+    """All attempts transient: the LAST response is returned so the caller's
+    raise_for_status() reports the final attempt truthfully."""
+    last = _status_resp(429)
+
+    with (
+        mock.patch("requests.post", side_effect=[_status_resp(500), _status_resp(503), last]),
+        mock.patch("pdf_router.ocr.time.sleep"),
+    ):
+        r = _post_with_retry("https://x/api", json={}, headers={}, timeout=1.0, max_retries=2)
+
+    assert r is last
+
+
+@needs_requests
+def test_retry_exhaustion_on_network_raises_last_exception() -> None:
+    """Network flavor of exhaustion: the last exception propagates so the
+    engine's OcrError wrap keeps the final attempt's message."""
+    import requests
+
+    boom = requests.ConnectionError("final failure")
+
+    with (
+        mock.patch("requests.post", side_effect=boom) as post,
+        mock.patch("pdf_router.ocr.time.sleep"),
+    ):
+        with pytest.raises(requests.ConnectionError) as exc_info:
+            _post_with_retry("https://x/api", json={}, headers={}, timeout=1.0, max_retries=1)
+
+    assert exc_info.value is boom
+    assert post.call_count == 2
+
+
+@needs_requests
+def test_retry_after_header_wins_over_backoff() -> None:
+    """Integer-seconds Retry-After overrides our own backoff; the HTTP-date
+    form is ignored (float() fails → exponential fallback)."""
+    sleeps: list[float] = []
+
+    with (
+        mock.patch(
+            "requests.post",
+            side_effect=[
+                _status_resp(429, headers={"Retry-After": "7"}),
+                _status_resp(503, headers={"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"}),
+                _status_resp(200),
+            ],
+        ),
+        mock.patch("pdf_router.ocr.time.sleep", side_effect=sleeps.append),
+    ):
+        _post_with_retry("https://x/api", json={}, headers={}, timeout=1.0)
+
+    assert sleeps[0] == 7.0
+    assert 2.0 <= sleeps[1] <= 2.5  # date form ignored → own backoff (2**1)
+
+
+@needs_requests
+def test_retry_disabled_with_max_retries_zero() -> None:
+    """max_retries=0 restores the old behavior: exactly one attempt."""
+    bad = _status_resp(500)
+
+    with (
+        mock.patch("requests.post", return_value=bad) as post,
+        mock.patch("pdf_router.ocr.time.sleep") as sleep,
+    ):
+        r = _post_with_retry("https://x/api", json={}, headers={}, timeout=1.0, max_retries=0)
+
+    assert r is bad
+    assert post.call_count == 1
+    sleep.assert_not_called()
+
+
+@needs_requests
+def test_engine_retry_params_flow_into_post_with_retry(p27_pdf) -> None:
+    """[ocr.*] max_retries / retry_backoff_s reach the helper for both cloud
+    engines; absent params keep the documented defaults (2 retries, 1.0 s)."""
+    resp = _resp(json_data={"md_results": "# ok", "choices": [{"message": {"content": "ok"}}]})
+
+    with mock.patch("pdf_router.ocr._post_with_retry", return_value=resp) as post:
+        _ocr_glm(str(p27_pdf), 0, {"api_key": "k", "max_retries": 5, "retry_backoff_s": 0.5})
+        _ocr_deepseek(str(p27_pdf), 0, {"api_key": "k", "max_retries": 1, "retry_backoff_s": 2.0})
+        _ocr_glm(str(p27_pdf), 0, {"api_key": "k"})  # no retry keys → defaults
+
+    glm_kwargs = post.call_args_list[0].kwargs
+    assert glm_kwargs["max_retries"] == 5
+    assert glm_kwargs["backoff_s"] == 0.5
+    ds_kwargs = post.call_args_list[1].kwargs
+    assert ds_kwargs["max_retries"] == 1
+    assert ds_kwargs["backoff_s"] == 2.0
+    default_kwargs = post.call_args_list[2].kwargs
+    assert default_kwargs["max_retries"] == 2
+    assert default_kwargs["backoff_s"] == 1.0

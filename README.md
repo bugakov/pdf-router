@@ -65,6 +65,15 @@ for page in ir.pages:
 # strict=True raises ProcessingError(report) if any page failed.
 markdown = pdf_router.convert("scan.pdf", strict=True)
 
+# Progress + cancel: the callback fires after each page, in document order,
+# on the calling thread. Raising PipelineCancelled inside it stops the run
+# cleanly — pages already done keep their results, never-started pages get
+# error="cancelled" (counted in report.pages_cancelled / pages_failed).
+def on_progress(ev):
+    print(f"{ev.pages_done}/{ev.pages_total}: page {ev.page + 1} [{ev.status}]")
+
+ir, report = pdf_router.process_pdf("big.pdf", progress=on_progress)
+
 # Render an IR you already hold (all three formats, files written).
 paths = pdf_router.write_outputs(ir, "out/", "doc")
 ```

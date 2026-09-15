@@ -20,8 +20,10 @@ from pdf_router.api import (
     IR_VERSION,
     Metadata,
     PageResult,
+    PipelineCancelled,
     ProcessingError,
     ProcessingReport,
+    ProgressEvent,
     RendererConfig,
     RouterConfig,
     SrcTool,
@@ -53,6 +55,7 @@ __all__ = [
     "write_outputs",
     # Errors
     "ConfigError",
+    "PipelineCancelled",
     "ProcessingError",
     "UnsupportedFormatError",
     # Types
@@ -61,6 +64,7 @@ __all__ = [
     "Metadata",
     "PageResult",
     "ProcessingReport",
+    "ProgressEvent",
     "RendererConfig",
     "RouterConfig",
     "SrcTool",

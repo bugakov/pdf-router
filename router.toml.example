@@ -42,6 +42,8 @@ log_level = "info"          # debug | info | warning | error; default "warning"
 ## optional:
 ## bin = "/usr/bin/tesseract"
 ## dpi = 200
+## timeout = 300             # hard cap on one tesseract invocation, seconds;
+##                           # a hang becomes OcrError -> page.error -> exit 2
 
 # --- GLM-OCR (z.ai) — cloud, API key -------------------------------------------
 # Requires the [cloud] extra: uv sync --extra cloud
@@ -55,6 +57,10 @@ log_level = "info"          # debug | info | warning | error; default "warning"
 ## optional:
 ## model = "glm-ocr"                 # dedicated document model (default)
 ## timeout = 300
+## max_retries = 2                   # retries on transient 429/5xx/network;
+##                                   # 0 disables (one attempt, old behavior)
+## retry_backoff_s = 1.0             # base delay, exponential + jitter;
+##                                   # provider Retry-After wins when larger
 
 # --- deepseek-ocr-2 (Novita AI) — cloud, API key ------------------------------
 # Requires the [cloud] extra: uv sync --extra cloud
@@ -70,6 +76,10 @@ log_level = "info"          # debug | info | warning | error; default "warning"
 ## timeout = 60
 ## max_tokens = 4096
 ## dpi = 200
+## max_retries = 2                   # retries on transient 429/5xx/network;
+##                                   # 0 disables (one attempt, old behavior)
+## retry_backoff_s = 1.0             # base delay, exponential + jitter;
+##                                   # provider Retry-After wins when larger
 
 [renderers]
 # Which renderers run is chosen via --render (CLI only); default: all three.
@@ -126,10 +136,12 @@ log_level = "info"          # debug | info | warning | error; default "warning"
 #   rapidocr:          dpi, det_model_type, rec_model_type
 #   pdf_inspector_ocr: pdfium_lib_path, ort_dylib_path (required);
 #                      dpi, minimum_confidence, offline, model_cache_dir
-#   tesseract:         languages (required); bin, dpi
-#   glm_ocr:           api_key, base_url (required); model, timeout
+#   tesseract:         languages (required); bin, dpi, timeout
+#   glm_ocr:           api_key, base_url (required); model, timeout,
+#                      max_retries, retry_backoff_s
 #   deepseek_ocr:      api_key, base_url (required); model, prompt,
-#                      timeout, max_tokens, dpi
+#                      timeout, max_tokens, dpi, max_retries,
+#                      retry_backoff_s
 
 # --- Post-OCR structure pass (IR 0.5, ADR-0005) ------------------------------
 # Every OCR'd page (scanned PDF or layerless djvu) grows real TableBlock /

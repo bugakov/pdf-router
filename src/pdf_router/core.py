@@ -38,6 +38,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +53,39 @@ from pdf_router.extract_images import extract_page_images
 logger = logging.getLogger("pdf_router")
 
 
+@dataclass(frozen=True)
+class ProgressEvent:
+    """One page finished — streamed to ``progress=`` callbacks.
+
+    ``status`` is computed by the SAME rule as the final report's
+    aggregation: ``page.error`` → ``"failed"``, ``page.needs_ocr`` →
+    ``"ocr"``, else ``"native"``. No events are emitted for pages skipped
+    by a cancellation — the stream simply stops. This keeps the streaming
+    contract consistent with the IR the caller receives at the end (the
+    report-must-not-contradict-the-IR invariant, per page).
+    ``elapsed_s`` is monotonic time since the ``process_pdf`` call.
+    """
+
+    page: int  # 0-based page index that just finished
+    pages_done: int  # finished pages so far, INCLUDING this one
+    pages_total: int
+    status: str  # "native" | "ocr" | "failed"
+    elapsed_s: float
+
+
+class PipelineCancelled(RuntimeError):
+    """Raised by a ``progress=`` callback to stop the remaining pages.
+
+    The sanctioned cancel protocol: raising this from inside the callback
+    aborts the run cleanly — pages already done keep their results, pages
+    not yet started get ``page.error = "cancelled"`` and count into
+    ``report.pages_failed`` (the report stays consistent with the IR).
+    Any OTHER exception escaping the callback is treated as a bug in the
+    caller's code: logged with traceback and counted in
+    ``report.progress_callback_errors``, the pipeline itself continues.
+    """
+
+
 @dataclass
 class ProcessingReport:
     pages_total: int = 0
@@ -59,6 +93,11 @@ class ProcessingReport:
     pages_ocr: int = 0
     pages_failed: int = 0
     pages_image_failed: int = 0
+    #: Exceptions raised by the ``progress=`` callback that were NOT the
+    #: ``PipelineCancelled`` protocol — caller's bugs, logged and survived.
+    progress_callback_errors: int = 0
+    #: Pages not processed because a callback raised PipelineCancelled.
+    pages_cancelled: int = 0
 
 
 def _engine_to_src_tool(engine: str) -> SrcTool:
@@ -71,6 +110,7 @@ def process_pdf(
     config: RouterConfig,
     *,
     output_dir: Path | None = None,
+    progress: "Callable[[ProgressEvent], None] | None" = None,
 ) -> tuple[IR, ProcessingReport]:
     """Full routing pipeline. Returns (IR, ProcessingReport).
 
@@ -83,6 +123,12 @@ def process_pdf(
     image extraction under ``<output_dir>/<doc-id>/images/``. The pipeline
     never reads ``config.renderers.output_dir`` — output policy belongs to
     the caller (API facade / CLI), not to the config.
+
+    ``progress`` receives a :class:`ProgressEvent` after each page is
+    finalized, in document order, on the caller's thread. Raising
+    :class:`PipelineCancelled` inside it is the sanctioned cancel protocol
+    (see that class). Any other exception is caller's-bug: logged and
+    counted, never fatal.
     """
     pdf_path = os.fspath(pdf_path)
     t0 = time.perf_counter()
@@ -113,6 +159,43 @@ def process_pdf(
     routing_cfg = config.routing
     workers = max(1, routing_cfg.workers or 2)
 
+    def _emit(page, pages_done: int, elapsed_s: float) -> bool:
+        """Stream one page-finished event. Returns False when the callback
+        cancelled the pipeline. Any other callback exception is a caller
+        bug — logged with traceback, counted, survived. Runs on the
+        collecting (caller's) thread, serialized in document order."""
+        if progress is None:  # unreachable via the call site; satisfies narrowing
+            return True
+        # Same rule as the report aggregation below — the event stream must
+        # never contradict the report/IR the caller ends up with. NB:
+        # src_tool is NOT the discriminator (native pages carry the default
+        # SrcTool.PDF_INSPECTOR); needs_ocr is what the report counts on.
+        if page.error:
+            status = "failed"
+        elif page.needs_ocr:
+            status = "ocr"
+        else:
+            status = "native"
+        try:
+            progress(
+                ProgressEvent(
+                    page=page.page,
+                    pages_done=pages_done,
+                    pages_total=report.pages_total,
+                    status=status,
+                    elapsed_s=elapsed_s,
+                )
+            )
+        except PipelineCancelled:
+            logger.info("progress callback cancelled the pipeline at page %d", page.page + 1)
+            return False
+        except Exception:
+            report.progress_callback_errors += 1
+            logger.exception("progress callback raised; event for page %d dropped", page.page + 1)
+        return True
+
+    cancel_requested = False
+    pages_done = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = []  # list of (page, img_fut, txt_fut)
         for page in doc.pages:
@@ -166,11 +249,63 @@ def process_pdf(
                     page.error = f"internal_error: {type(exc).__name__}: {exc}"
                     logger.error("page %d: text processing failed: %s", page.page + 1, exc)
 
+            pages_done += 1
+            if progress is not None and not _emit(
+                page, pages_done, time.perf_counter() - t0
+            ):
+                cancel_requested = True
+                # Cancel the still-queued futures BEFORE the with-block exit
+                # — its shutdown(wait=True) would otherwise drain the whole
+                # queue and make the cancel pointless. Pages already IN
+                # FLIGHT (at most `workers`) finish during the exit, bounded
+                # by the per-call timeouts added earlier.
+                pool.shutdown(wait=False, cancel_futures=True)
+                break
+
+    if cancel_requested:
+        # Pages that never ran get page.error = "cancelled"; in-flight pages
+        # keep their real result (success or failure). Future.cancelled() is
+        # True exactly for futures discarded before they started, so it
+        # separates "never ran" from "ran during pool exit". A page ran iff
+        # at least one of its futures exists and was not cancelled.
+        for page, img_fut, txt_fut in futures[pages_done:]:
+            ran_img = img_fut is not None and not img_fut.cancelled()
+            ran_txt = txt_fut is not None and not txt_fut.cancelled()
+            if not ran_img and not ran_txt:
+                page.error = "cancelled"
+                continue
+            # In-flight page: surface its outcome exactly like the main
+            # collection loop above — a queued-but-cancelled future never
+            # ran, so only non-cancelled ones carry a result or a crash.
+            if img_fut is not None:
+                if ran_img:
+                    try:
+                        page.images = img_fut.result()
+                    except Exception as exc:
+                        logger.error(
+                            "page %d: image extraction failed: %s", page.page + 1, exc
+                        )
+                        page.images = []
+                        report.pages_image_failed += 1
+                else:
+                    page.images = []
+            if txt_fut is not None and ran_txt:
+                try:
+                    txt_fut.result()
+                except Exception as exc:
+                    page.error = f"internal_error: {type(exc).__name__}: {exc}"
+                    logger.error(
+                        "page %d: text processing failed: %s", page.page + 1, exc
+                    )
+
     # Aggregate report. pages_failed counts ANY page carrying an error —
-    # OCR failures and internal crashes alike (report must not contradict
-    # the IR it describes).
+    # OCR failures, internal crashes and cancelled pages alike (report must
+    # not contradict the IR it describes).
     for page in doc.pages:
-        if page.error:
+        if page.error == "cancelled":
+            report.pages_cancelled += 1
+            report.pages_failed += 1
+        elif page.error:
             report.pages_failed += 1
         elif page.needs_ocr:
             report.pages_ocr += 1

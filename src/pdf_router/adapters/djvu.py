@@ -55,15 +55,32 @@ class DjvuError(ValueError):
 # Subprocess runners
 # ---------------------------------------------------------------------------
 
+#: Hard cap on one djvulibre tool invocation, in seconds. Healthy calls are
+#: milliseconds (djvused/djvudump) to a few seconds (ddjvu page render); a
+#: corrupted stream can hang the tool forever instead — and a hung worker
+#: thread would wedge the whole pipeline (ThreadPoolExecutor.shutdown waits
+#: for it), with no page.error, no exit code, no log. A timeout turns that
+#: silent wedge into the ordinary typed failure path (DjvuError → page.error
+#: → exit 2/3). Generous by design: this guards against hangs, not slowness.
+TOOL_TIMEOUT_S = 300.0
+
 
 def _run(cmd: list[str], *, stdin: bytes | None = None) -> bytes:
-    """Run an external tool, raising :class:`DjvuError` on failure."""
+    """Run an external tool, raising :class:`DjvuError` on failure or hang."""
     try:
         proc = subprocess.run(
-            cmd, input=stdin, capture_output=True, check=False
+            cmd,
+            input=stdin,
+            capture_output=True,
+            check=False,
+            timeout=TOOL_TIMEOUT_S,
         )
     except FileNotFoundError as exc:
         raise DjvuError(f"tool not found: {cmd[0]} (install djvulibre-bin)") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise DjvuError(
+            f"{cmd[0]} timed out after {TOOL_TIMEOUT_S:g}s (corrupt document?)"
+        ) from exc
     if proc.returncode != 0:
         err = proc.stderr.decode(errors="replace")[:300]
         raise DjvuError(f"{cmd[0]} exited {proc.returncode}: {err}")

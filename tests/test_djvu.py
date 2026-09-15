@@ -367,6 +367,39 @@ def test_route_djvu_end_to_end(text_layer_djvu: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Subprocess timeouts (anti-hang; see adapters/djvu.py TOOL_TIMEOUT_S)
+# ---------------------------------------------------------------------------
+
+
+def test_run_timeout_raises_djvu_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A hung djvulibre tool must surface as DjvuError, not wedge the
+    worker thread forever (ThreadPoolExecutor.shutdown waits for it —
+    a silent hang would stall the whole run with no page.error)."""
+    import subprocess
+
+    from pdf_router.adapters.djvu import _run
+
+    def _hang(*args: object, **kwargs: object) -> object:
+        raise subprocess.TimeoutExpired(cmd=["djvused"], timeout=0.01)
+
+    monkeypatch.setattr("pdf_router.adapters.djvu.subprocess.run", _hang)
+    with pytest.raises(DjvuError, match="timed out"):
+        _run(["djvused", "-u", "/dev/null", "-e", "n"])
+
+
+def test_run_timeout_uses_tool_timeout_constant() -> None:
+    """Every djvulibre invocation gets the hard cap — regressions that
+    drop the timeout= kwarg must fail here."""
+    import inspect
+
+    from pdf_router.adapters.djvu import TOOL_TIMEOUT_S, _run
+
+    src = inspect.getsource(_run)
+    assert "timeout=TOOL_TIMEOUT_S" in src
+    assert TOOL_TIMEOUT_S > 0
+
+
+# ---------------------------------------------------------------------------
 # Slow tier: real OCR on a corpus page (deselect with -m 'not slow')
 # ---------------------------------------------------------------------------
 

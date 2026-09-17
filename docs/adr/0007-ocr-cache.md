@@ -1,6 +1,7 @@
 # ADR-0007: OCR cache — content-addressed page memoization
 
-- **Status:** Proposed (verification pending — see vbrdb wayfinder #23)
+- **Status:** Accepted (implemented in 0.6.0, E2E-verified on real rapidocr;
+  corpus-level verification pending — vbrdb wayfinder #23)
 - **Date:** 2026-09-16
 - **Context:** vbrdb wayfinder map `bugakov/vbrdb#24` (tickets #18–#21);
   consumer: vbrdb parse worker (`orchestrator/parse_worker.py`)

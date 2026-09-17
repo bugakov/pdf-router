@@ -35,19 +35,23 @@ Key decisions:
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from pdf_router.config import RouterConfig
 from pdf_router.formats import route
 from pdf_router.ir import IR, SrcTool
 from pdf_router.quality import looks_like_text
 from pdf_router.ocr import ocr_page, OcrError
+from pdf_router.ocr_cache import _md5_of, params_fingerprint
 from pdf_router.extract_images import extract_page_images
 
 logger = logging.getLogger("pdf_router")
@@ -98,11 +102,47 @@ class ProcessingReport:
     progress_callback_errors: int = 0
     #: Pages not processed because a callback raised PipelineCancelled.
     pages_cancelled: int = 0
+    #: OCR pages served from the content-addressed cache (ADR-0007) —
+    #: included in pages_ocr, so total counts stay unchanged.
+    pages_ocr_cached: int = 0
 
 
 def _engine_to_src_tool(engine: str) -> SrcTool:
     """Map engine name string to SrcTool enum value."""
     return SrcTool(engine)
+
+
+class _LazyDigest:
+    """Thread-safe, on-first-use md5 of the source file (ADR-0007).
+
+    The digest is needed only when the first OCR page touches the cache,
+    so native-only runs never pay for hashing a large file. ``known``
+    (caller-supplied ``content_md5``) short-circuits hashing entirely.
+    A hashing failure disables the cache for the run (returns ``None``)
+    instead of breaking it — the cache may only accelerate.
+    """
+
+    def __init__(self, path: str, known: str | None) -> None:
+        self._path = path
+        self._lock = threading.Lock()
+        self._value: str | None = known if known else None
+        self._broken = known is not None and not known
+
+    def get(self) -> str | None:
+        if self._value is not None:
+            return self._value
+        with self._lock:
+            if self._value is None and not self._broken:
+                try:
+                    self._value = _md5_of(self._path)
+                except OSError:
+                    logger.warning(
+                        "ocr_cache: cannot hash %s; cache disabled for this run",
+                        self._path,
+                        exc_info=True,
+                    )
+                    self._broken = True
+            return self._value
 
 
 def process_pdf(
@@ -111,6 +151,8 @@ def process_pdf(
     *,
     output_dir: Path | None = None,
     progress: "Callable[[ProgressEvent], None] | None" = None,
+    ocr_cache: "Any | None" = None,
+    content_md5: "str | None" = None,
 ) -> tuple[IR, ProcessingReport]:
     """Full routing pipeline. Returns (IR, ProcessingReport).
 
@@ -129,6 +171,15 @@ def process_pdf(
     :class:`PipelineCancelled` inside it is the sanctioned cancel protocol
     (see that class). Any other exception is caller's-bug: logged and
     counted, never fatal.
+
+    ``ocr_cache`` (ADR-0007): optional :class:`pdf_router.ocr_cache.OcrCache`.
+    When given, every OCR page consults the cache first and every completed
+    OCR page is written to it — a re-run of an interrupted document then
+    pays OCR only for the pages that never finished. ``content_md5``
+    supplies the document digest for the cache key; ``None`` (default)
+    hashes the file lazily, only if the first OCR page needs the key —
+    native-only runs never hash. Cache errors degrade silently to live
+    OCR: the cache can only accelerate, never break the run.
     """
     pdf_path = os.fspath(pdf_path)
     t0 = time.perf_counter()
@@ -136,6 +187,14 @@ def process_pdf(
     # UnsupportedFormatError before any page work for unrecognized content.
     inspector = route(pdf_path)
     doc = inspector(pdf_path)
+    # ADR-0007: lazy per-run digest wrapper (hashes only if the first OCR
+    # page needs a cache key; a caller-supplied content_md5 short-circuits
+    # hashing entirely). None when ocr_cache is None — zero overhead.
+    digest = (
+        _LazyDigest(pdf_path, content_md5)
+        if ocr_cache is not None
+        else None
+    )
     # IR 0.5.1 (ADR-0006): the single fill point for source_path. The
     # renderer layer derives doc_id/doc_title from it; adapters stay
     # path-agnostic. asdict() carries it into to_dict automatically.
@@ -196,6 +255,16 @@ def process_pdf(
 
     cancel_requested = False
     pages_done = 0
+    # ADR-0007: bind the cache context via partial only when a cache is in
+    # play — the plain path keeps the historical 3-positional-arg call so
+    # existing tests can keep patching _process_text_for_page(page, path, cfg).
+    text_worker = (
+        functools.partial(
+            _process_text_for_page, ocr_cache=ocr_cache, digest=digest
+        )
+        if ocr_cache is not None
+        else _process_text_for_page
+    )
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = []  # list of (page, img_fut, txt_fut)
         for page in doc.pages:
@@ -220,7 +289,7 @@ def process_pdf(
                     )
                 # djvu: img_fut stays None — page.images = [] (TKT-DJV-06).
             txt_fut = (
-                pool.submit(_process_text_for_page, page, pdf_path, config)
+                pool.submit(text_worker, page, pdf_path, config)
                 if run_text_pass
                 else None
             )
@@ -244,7 +313,8 @@ def process_pdf(
             # (docx pages skip the pass entirely — see run_text_pass above.)
             if txt_fut is not None:
                 try:
-                    txt_fut.result()
+                    if txt_fut.result():
+                        report.pages_ocr_cached += 1
                 except Exception as exc:
                     page.error = f"internal_error: {type(exc).__name__}: {exc}"
                     logger.error("page %d: text processing failed: %s", page.page + 1, exc)
@@ -291,7 +361,8 @@ def process_pdf(
                     page.images = []
             if txt_fut is not None and ran_txt:
                 try:
-                    txt_fut.result()
+                    if txt_fut.result():
+                        report.pages_ocr_cached += 1
                 except Exception as exc:
                     page.error = f"internal_error: {type(exc).__name__}: {exc}"
                     logger.error(
@@ -330,8 +401,18 @@ def process_pdf(
 # ---------------------------------------------------------------------------
 
 
-def _process_text_for_page(page, pdf_path: str, config: RouterConfig) -> None:
-    """Mutates page in-place: markdown, src_tool, error.
+def _process_text_for_page(
+    page,
+    pdf_path: str,
+    config: RouterConfig,
+    ocr_cache: "Any | None" = None,
+    digest: "_LazyDigest | None" = None,
+) -> bool:
+    """Mutate page in-place: markdown, src_tool, error.
+
+    Returns True only when the page came from the OCR cache (ADR-0007) —
+    the caller aggregates that counter on the main thread (workers never
+    touch report counters).
 
     Logic (TKT-RT-01, extended by TKT-DJV-03/04):
     1. If the inspector already said needs_ocr → skip looks_like_text
@@ -363,7 +444,7 @@ def _process_text_for_page(page, pdf_path: str, config: RouterConfig) -> None:
             language=config.routing.language,
             threshold=config.routing.text_alpha_threshold,
         ):
-            return  # native text is fine
+            return False  # native text is fine
         page.ocr_reason = "low_text_quality"
     else:
         page.ocr_reason = "inspector_needs_ocr"
@@ -371,6 +452,37 @@ def _process_text_for_page(page, pdf_path: str, config: RouterConfig) -> None:
     # Fall through: rasterize + OCR.
     # Set src_tool BEFORE the call so it is correct even on failure.
     _src = _engine_to_src_tool(config.routing.ocr_fallback_engine)
+
+    # ADR-0007: consult the content-addressed cache before paying for
+    # rasterization + OCR. All cache errors degrade to a live OCR call —
+    # the cache can only accelerate, never break the run.
+    if ocr_cache is not None and digest is not None:
+        try:
+            engine = config.routing.ocr_fallback_engine
+            content_md5 = digest.get()
+            hit = (
+                None
+                if content_md5 is None
+                else ocr_cache.get(
+                    content_md5, page.page, engine, params_fingerprint(config, engine)
+                )
+            )
+        except Exception:
+            logger.warning(
+                "page %d: ocr_cache get failed; live OCR", page.page + 1, exc_info=True
+            )
+            hit = None
+        if hit is not None:
+            md, blocks = hit
+            page.markdown = md
+            page.blocks = blocks
+            page.src_tool = _src
+            page.error = None
+            # ADR-0007: a restored page is indistinguishable from a freshly
+            # OCR'd one — the gates above already set the true ocr_reason
+            # (low_text_quality / inspector_needs_ocr); never rewrite it.
+            return True
+
     try:
         md, _engine, blocks = ocr_page(pdf_path, page.page, config)
         page.markdown = md
@@ -379,10 +491,29 @@ def _process_text_for_page(page, pdf_path: str, config: RouterConfig) -> None:
         page.blocks = blocks
         page.src_tool = _src
         page.error = None
+        if ocr_cache is not None and digest is not None:
+            try:
+                engine = config.routing.ocr_fallback_engine
+                content_md5 = digest.get()
+                if content_md5 is not None:
+                    ocr_cache.put(
+                        content_md5,
+                        page.page,
+                        engine,
+                        params_fingerprint(config, engine),
+                        md,
+                        blocks,
+                    )
+            except Exception:
+                logger.warning(
+                    "page %d: ocr_cache put failed", page.page + 1, exc_info=True
+                )
+        return False
     except OcrError as exc:
         page.src_tool = _src  # mark what was attempted
         page.error = f"{config.routing.ocr_fallback_engine}_failed: {exc}"
         logger.warning("page %d: %s", page.page + 1, exc)
+        return False
 
 
 

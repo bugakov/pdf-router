@@ -49,6 +49,7 @@ import logging
 import os
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from pdf_router.config import (
     ConfigError,
@@ -71,11 +72,13 @@ from pdf_router.ir import (
     from_dict,
     to_dict,
 )
+from pdf_router.ocr_cache import OcrCache, params_fingerprint
 
 logger = logging.getLogger("pdf_router")
 
 __all__ = [
     "ConfigError",
+    "OcrCache",
     "PipelineCancelled",
     "ProcessingError",
     "ProcessingReport",
@@ -83,6 +86,7 @@ __all__ = [
     "UnsupportedFormatError",
     "convert",
     "load_config",
+    "params_fingerprint",
     "process_pdf",
     "render_chunks",
     "render_json",
@@ -221,6 +225,8 @@ def process_pdf(
     output_dir: str | Path | None = None,
     strict: bool = False,
     progress: "Callable[[ProgressEvent], None] | None" = None,
+    ocr_cache: "Any | None" = None,
+    content_md5: str | None = None,
 ) -> tuple[IR, ProcessingReport]:
     """Run the full routing pipeline. Returns ``(IR, ProcessingReport)``.
 
@@ -249,6 +255,18 @@ def process_pdf(
             and ``pages_failed``). Any other exception is treated as a bug
             in the caller's code: logged with traceback, counted in
             ``report.progress_callback_errors``, never fatal.
+        ocr_cache (ADR-0007): optional :class:`pdf_router.ocr_cache.OcrCache`.
+            ``None`` (default) keeps the run pure — no cache reads or writes.
+            When supplied, OCR page results are looked up before running the
+            OCR engine and stored after it, keyed by
+            ``(content_md5, page_idx, engine, params)`` — a rerun of the
+            same document pays OCR only for the pages that never finished.
+            The cache object must be thread-safe (pages are processed
+            concurrently).
+        content_md5: hex MD5 digest of the document bytes, required for the
+            cache key when ``ocr_cache`` is given. ``None`` (default) means
+            the digest is computed lazily inside the pipeline on first OCR
+            page (one extra read of the file, only when needed).
 
     Raises:
         ConfigError: bad ``config``.
@@ -259,7 +277,14 @@ def process_pdf(
     """
     cfg = _coerce_config(config)
     out_dir = Path(output_dir) if output_dir is not None else None
-    ir, report = _pipeline(str(pdf_path), cfg, output_dir=out_dir, progress=progress)
+    ir, report = _pipeline(
+        str(pdf_path),
+        cfg,
+        output_dir=out_dir,
+        progress=progress,
+        ocr_cache=ocr_cache,
+        content_md5=content_md5,
+    )
     if strict and report.pages_failed:
         raise ProcessingError(report)
     return ir, report

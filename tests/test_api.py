@@ -350,6 +350,8 @@ def test_strict_raises_when_pages_failed(p5_pdf: Path, monkeypatch: pytest.Monke
         *,
         output_dir: Path | None = None,
         progress: object = None,
+        ocr_cache: object | None = None,
+        content_md5: str | None = None,
     ) -> tuple[IR, ProcessingReport]:
         return real_ir, report
 

@@ -8,6 +8,7 @@ license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "lineless-table-rec==0.1.0",
+    "office-oxide==0.1.12",
     "onnxruntime>=1.29.0",
     "pdf-inspector>=1.17",
     "pymupdf>=1.27",

@@ -13,8 +13,10 @@ halves:
   through, raising :class:`UnsupportedFormatError` *before any page work*.
 
 Supported today: PDF (via the pdf-inspector adapter), DOCX (via the
-native stdlib adapter, ADR-0003) and DJVU (via the native djvulibre
-subprocess adapter, ADR-0004). Unrecognized content raises
+native stdlib adapter, ADR-0003), DJVU (via the native djvulibre
+subprocess adapter, ADR-0004), XLSX (via the native stdlib adapter,
+ADR-0008), legacy DOC (via office-oxide, ADR-0008) and HTML-masquerade
+files (minimal stdlib tag-strip, ADR-0008). Unrecognized content raises
 :class:`UnsupportedFormatError` before any page work, so callers branch
 on a typed exception instead of parsing strings. Adding a format = one
 enum member + one magic-byte branch + one registry entry; nothing
@@ -54,6 +56,9 @@ class Format(enum.Enum):
     PDF = "pdf"
     DOCX = "docx"
     DJVU = "djvu"
+    XLSX = "xlsx"
+    DOC = "doc"
+    HTML = "html"
 
 #: The inspector contract: one callable per format — document path in,
 #: fully-populated ``IR`` out. The pdf-inspector adapter's module-level
@@ -85,23 +90,53 @@ def _djvu_inspector(path: str) -> IR:
     return extract_ir(path)
 
 
+def _xlsx_inspector(path: str) -> IR:
+    # Native stdlib parser (ADR-0008) — lazy like the others.
+    from pdf_router.adapters.xlsx import extract_ir
+
+    return extract_ir(path)
+
+
+def _doc_inspector(path: str) -> IR:
+    # office-oxide binding (ADR-0008, pinned core dep) — lazy per the
+    # heavy-deps rule: the native module loads only when a .doc does.
+    from pdf_router.adapters.doc import extract_ir
+
+    return extract_ir(path)
+
+
+def _html_inspector(path: str) -> IR:
+    # Minimal stdlib tag-strip (ADR-0008) — lazy like the others.
+    from pdf_router.adapters.html import extract_ir
+
+    return extract_ir(path)
+
+
 #: Format -> inspector registry. The dispatcher's single source of truth:
 #: core.py never imports an adapter directly.
 _INSPECTORS: dict[Format, Inspector] = {
     Format.PDF: _pdf_inspector,
     Format.DOCX: _docx_inspector,
     Format.DJVU: _djvu_inspector,
+    Format.XLSX: _xlsx_inspector,
+    Format.DOC: _doc_inspector,
+    Format.HTML: _html_inspector,
 }
 
 # ZIP local/empty/spanned headers — any of them means "some zip package".
 _ZIP_MAGICS = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
+# Legacy Word OLE2/CFB container magic (TKT-OI-05 branch 5).
+_OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+# HTML sniff: BOM/leading-WS-tolerant prefix check (TKT-OI-05 branch 6).
+_HTML_PREFIXES = (b"<!doctype html", b"<html")
+_BOM_WS = b"\xef\xbb\xbf \t\r\n"
 # How much of the file head the sniff reads. %PDF- at offset 0 is the spec;
 # real-world files sometimes carry leading junk, which pdfium tolerates too.
 _SNIFF_WINDOW = 1024
 
 
 def _sniff_zip(path: Path) -> Format:
-    """Distinguish a docx from other ZIP packages (xlsx/pptx/epub/jar...)."""
+    """Distinguish docx/xlsx from other ZIP packages (pptx/epub/jar...)."""
     try:
         with zipfile.ZipFile(path) as zf:
             names = set(zf.namelist())
@@ -109,9 +144,13 @@ def _sniff_zip(path: Path) -> Format:
         raise UnsupportedFormatError(f"corrupt zip archive: {path} ({exc})") from exc
     if "word/document.xml" in names:
         return Format.DOCX
+    if "xl/workbook.xml" in names:
+        return Format.XLSX
+    if "ppt/presentation.xml" in names:
+        raise UnsupportedFormatError(f"PowerPoint pptx is not routed (out of scope): {path}")
     if "[Content_Types].xml" in names:
         raise UnsupportedFormatError(
-            f"OOXML package that is not a docx (xlsx/pptx?): {path}"
+            f"OOXML package that is not docx/xlsx (pptx?): {path}"
         )
     raise UnsupportedFormatError(f"zip archive, not a routed document format: {path}")
 
@@ -119,14 +158,19 @@ def _sniff_zip(path: Path) -> Format:
 def detect_format(path: str | Path) -> Format:
     """Sniff the document format from magic bytes (never the extension).
 
-    Reads at most the first 1 KiB.
+    Reads at most the first 1 KiB (plus the name check for ``~$`` locks —
+    the one deliberate name-based predicate: a 162-byte lock file's content
+    is not reliably detectable, TKT-OI-05 branch 0).
 
     Raises:
         FileNotFoundError: the path does not exist (propagated from open).
-        UnsupportedFormatError: empty file, unrecognized content, or a
-            ZIP package that is not a docx (the message carries a hint).
+        UnsupportedFormatError: empty file, unrecognized content, a Word
+            lock file, or a ZIP package that is not a docx/xlsx (the
+            message carries a hint).
     """
     p = Path(path)
+    if p.name.startswith("~$"):
+        raise UnsupportedFormatError(f"Word lock/owner file (~$…), not a document: {p}")
     with p.open("rb") as fh:
         head = fh.read(_SNIFF_WINDOW)
     if not head:
@@ -137,6 +181,10 @@ def detect_format(path: str | Path) -> Format:
         return Format.DJVU
     if head.startswith(_ZIP_MAGICS):
         return _sniff_zip(p)
+    if head.startswith(_OLE2_MAGIC):
+        return Format.DOC
+    if head.lstrip(_BOM_WS).lower().startswith(_HTML_PREFIXES):
+        return Format.HTML
     raise UnsupportedFormatError(
         f"unrecognized file format: {p} (starts with {head[:8].hex(' ')})"
     )

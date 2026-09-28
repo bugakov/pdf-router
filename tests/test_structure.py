@@ -168,7 +168,7 @@ def test_blocks_from_glm_empty_layout() -> None:
 
 
 def test_ir_version_is_05() -> None:
-    assert IR_VERSION == "0.5"
+    assert IR_VERSION == "0.6"
 
 
 # ---------------------------------------------------------------------------

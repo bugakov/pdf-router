@@ -56,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "input",
         nargs="?",
-        help="Input document path (format detected by content; PDF, DOCX and DJVU today)",
+        help="Input document path (format detected by content; PDF, DOCX, XLSX, DOC, HTML and DJVU today)",
     )
     return parser
 
@@ -105,6 +105,18 @@ def _info_payload(fmt: Format, path: Path) -> dict:
         from pdf_router.adapters.djvu import djvu_info
 
         return djvu_info(str(path))
+    if fmt is Format.XLSX:
+        from pdf_router.adapters.xlsx import xlsx_info
+
+        return xlsx_info(str(path))
+    if fmt is Format.DOC:
+        from pdf_router.adapters.doc import doc_info
+
+        return doc_info(str(path))
+    if fmt is Format.HTML:
+        from pdf_router.adapters.html import html_info
+
+        return html_info(str(path))
     raise UnsupportedFormatError(f"--info does not support {fmt.name} yet")
 
 
@@ -143,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # --info: one door (TKT-DX-06): PDFs go to the Rust classifier, docx
-    # and djvu to their native inspectors' metadata summaries; other
+    # / djvu / xlsx to their native inspectors' metadata summaries; other
     # recognized formats are a typed refusal. A corrupt document is a
     # document failure (exit 3), an unroutable format a usage error (1).
     if args.info:

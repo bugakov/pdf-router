@@ -53,6 +53,7 @@ HEAVY_MODULES = (
     "onnxruntime",
     "requests",
     "pdf_inspector",
+    "office_oxide",
 )
 
 

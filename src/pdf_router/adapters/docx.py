@@ -25,13 +25,13 @@ the ``basedOn`` chain with a cycle guard.
 
 from __future__ import annotations
 
-import posixpath
 import re
 import time
 import zipfile
 from pathlib import Path, PurePosixPath
 from xml.etree import ElementTree as ET
 
+from pdf_router.adapters.ooxml import core_title, load_rels, read_xml, rows_to_markdown
 from pdf_router.ir import (
     FigureBlock,
     FormulaBlock,
@@ -47,7 +47,6 @@ _W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 _V = "urn:schemas-microsoft-com:vml"
-_DC = "http://purl.org/dc/elements/1.1/"
 
 _TAG_P = f"{{{_W}}}p"
 _TAG_TBL = f"{{{_W}}}tbl"
@@ -86,40 +85,6 @@ _MAX_HEADING = 6  # markdown vocabulary; outlineLvl 6-8 collapses to H6
 # ---------------------------------------------------------------------------
 
 
-def _load_rels(zf: zipfile.ZipFile, part: str) -> dict[str, str]:
-    """Relationship map for one package part: rId -> internal target.
-
-    ``part`` is like ``word/document.xml``; its rels live at
-    ``word/_rels/document.xml.rels``. External targets (hyperlinks) and
-    missing rels files are skipped.
-    """
-    base, name = part.rsplit("/", 1)
-    rels_path = f"{base}/_rels/{name}.rels"
-    try:
-        root = ET.fromstring(zf.read(rels_path))
-    except (KeyError, ET.ParseError):
-        return {}
-    out: dict[str, str] = {}
-    for rel in root:
-        rid = rel.get("Id")
-        target = rel.get("Target")
-        if not rid or not target or rel.get("TargetMode") == "External":
-            continue
-        if target.startswith("/"):
-            resolved = target.lstrip("/")
-        else:
-            resolved = posixpath.normpath(f"{base}/{target}")
-        out[rid] = resolved
-    return out
-
-
-def _read_xml(zf: zipfile.ZipFile, part: str) -> ET.Element | None:
-    try:
-        return ET.fromstring(zf.read(part))
-    except (KeyError, ET.ParseError):
-        return None
-
-
 def _image_ext(target: str) -> str:
     ext = PurePosixPath(target).suffix.lower().lstrip(".")
     return ext or "png"
@@ -143,7 +108,7 @@ def _image_sidecar_name(index: int) -> str:
 
 def _load_styles(zf: zipfile.ZipFile) -> dict[str, dict]:
     """styleId -> {name, outline (0-8 or None), based_on} from styles.xml."""
-    root = _read_xml(zf, "word/styles.xml")
+    root = read_xml(zf, "word/styles.xml")
     if root is None:
         return {}
     styles: dict[str, dict] = {}
@@ -287,24 +252,6 @@ def _table_rows(tbl: ET.Element) -> list[list[str]]:
     return [r + [""] * (width - len(r)) for r in rows]
 
 
-def _rows_to_markdown(rows: list[list[str]]) -> str:
-    """Pipe-table markdown from exact rows (header row + separator)."""
-    if not rows:
-        return ""
-    width = max(len(r) for r in rows)
-
-    def esc(s: str) -> str:
-        return s.replace("|", "\\|").strip()
-
-    def line(cells: list[str]) -> str:
-        padded = cells + [""] * (width - len(cells))
-        return "| " + " | ".join(esc(c) for c in padded) + " |"
-
-    lines = [line(rows[0]), "|" + "|".join([" --- "] * width) + "|"]
-    lines.extend(line(r) for r in rows[1:])
-    return "\n".join(lines)
-
-
 # ---------------------------------------------------------------------------
 # Canonical image order (single source for placeholders AND sidecar files)
 # ---------------------------------------------------------------------------
@@ -324,10 +271,10 @@ def _iter_docx_image_targets(zf: zipfile.ZipFile) -> list[str]:
     seen: set[str] = set()
 
     def walk(part: str) -> None:
-        root = _read_xml(zf, part)
+        root = read_xml(zf, part)
         if root is None:
             return
-        rels = _load_rels(zf, part)
+        rels = load_rels(zf, part)
         for node in root.iter():
             rid = None
             if node.tag == _TAG_BLIP:
@@ -394,13 +341,13 @@ def _walk_blocks(
             tables += 1
             blocks.append(
                 TableBlock(
-                    markdown=_rows_to_markdown(rows),
+                    markdown=rows_to_markdown(rows),
                     rows=rows,
                     header_rows=1 if len(rows) > 1 else 0,
                     bbox=None,
                 )
             )
-            md_parts.append(_rows_to_markdown(rows))
+            md_parts.append(rows_to_markdown(rows))
             # Images inside table cells: extracted as sidecars, placeholder
             # deferred to the document tail (a pipe cell cannot hold one).
             for tc in el.iter(_TAG_TC):
@@ -466,16 +413,6 @@ def _attach_captions(figures: list[FigureBlock], paragraphs: list[str]) -> None:
                 break
 
 
-def _core_title(zf: zipfile.ZipFile) -> str | None:
-    root = _read_xml(zf, "docProps/core.xml")
-    if root is None:
-        return None
-    title = root.find(f"{{{_DC}}}title")
-    if title is not None and title.text and title.text.strip():
-        return title.text.strip()
-    return None
-
-
 def extract_ir(path: str) -> IR:
     """Native docx -> IR (page 0 = the whole document; ADR-0003).
 
@@ -493,7 +430,7 @@ def extract_ir(path: str) -> IR:
     except zipfile.BadZipFile as exc:
         raise ValueError(f"malformed docx (bad zip): {path}: {exc}") from exc
     with zf:
-        root = _read_xml(zf, "word/document.xml")
+        root = read_xml(zf, "word/document.xml")
         if root is None:
             raise ValueError(f"malformed docx (unreadable word/document.xml): {path}")
         body = root.find(f"{{{_W}}}body")
@@ -501,7 +438,7 @@ def extract_ir(path: str) -> IR:
             raise ValueError(f"malformed docx (no w:body): {path}")
 
         styles = _load_styles(zf)
-        rels = _load_rels(zf, "word/document.xml")
+        rels = load_rels(zf, "word/document.xml")
         image_targets = _iter_docx_image_targets(zf)
         target_to_index = {t: i for i, t in enumerate(image_targets)}
 
@@ -524,8 +461,8 @@ def extract_ir(path: str) -> IR:
         for name in sorted(zf.namelist()):
             if not re.fullmatch(r"word/(header|footer)\d*\.xml", name):
                 continue
-            part_rels = _load_rels(zf, name)
-            part_root = _read_xml(zf, name)
+            part_rels = load_rels(zf, name)
+            part_root = read_xml(zf, name)
             if part_root is None:
                 continue
             for target in _para_image_targets(part_root, part_rels):
@@ -538,7 +475,7 @@ def extract_ir(path: str) -> IR:
                         f"![]({_image_sidecar_name(idx)}.{_image_ext(target)})"
                     )
 
-        title = _core_title(zf)
+        title = core_title(zf)
 
     markdown = "\n\n".join(md_parts).strip()
     elapsed_ms = (time.perf_counter() - t0) * 1000.0

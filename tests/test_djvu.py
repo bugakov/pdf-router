@@ -116,7 +116,7 @@ def test_ir04_roundtrip_preserves_djvu_provenance(text_layer_djvu: Path) -> None
 
     ir = extract_ir(str(text_layer_djvu))
     d = to_dict(ir)
-    assert d["ir_version"] == IR_VERSION == "0.5"
+    assert d["ir_version"] == IR_VERSION == "0.6"
     assert d["pages"][0]["src_tool"] == "djvu_text_layer"
     ir2 = from_dict(d)
     assert ir2.pages[0].src_tool is SrcTool.DJVU_TEXT_LAYER

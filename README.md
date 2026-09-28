@@ -1,6 +1,6 @@
 # pdf-router
 
-Ultra-minimal, deterministic PDF/DOCX/DJVU → LLM-ready Markdown router.
+Ultra-minimal, deterministic PDF/DOCX/XLSX/DOC/HTML/DJVU → LLM-ready Markdown router.
 
 Primary inputs: scientific journals, monographs, project documentation.
 Output: per-page markdown (with optional page markers), RAG-ready JSONL
@@ -17,8 +17,8 @@ uv sync --extra dev           # pytest + ruff + mypy (lint/types/CI gate)
 
 Requires Python ≥ 3.12 and the [pdf-inspector](https://github.com/firecrawl/pdf-inspector)
 native wheel (≥ 1.17). For DJVU input, `djvulibre-bin` must be on `PATH`
-(`djvused`, `djvudump`, `ddjvu` — ADR-0004); PDF/DOCX need no external
-binaries.
+(`djvused`, `djvudump`, `ddjvu` — ADR-0004); PDF/DOCX/XLSX/DOC/HTML need
+no external binaries (DOC parses in-process via the `office-oxide` wheel).
 
 ## Quick start
 
@@ -31,6 +31,10 @@ pdf-router path/to/том.docx
 
 # And a djvu — djvulibre subprocess adapter (ADR-0004)
 pdf-router path/to/книга.djvu
+
+# xlsx (native stdlib), legacy .doc (office-oxide) and HTML-as-.doc also route
+pdf-router path/to/смета.xlsx
+pdf-router path/to/приложение.doc
 
 # Only the markdown output
 pdf-router --render md path/to/file.pdf
@@ -86,10 +90,11 @@ before the first page is processed, so typos never silently change routing
 or burn a pipeline run.
 
 Input format is detected from **magic bytes, not the file extension**.
-Today PDF, DOCX and DJVU are routable. A docx renamed to `.pdf` converts
-as docx; a PDF renamed to `.djvu` converts as PDF. Adding a format means
-one registry entry in `src/pdf_router/formats.py`; nothing downstream
-changes.
+Today PDF, DOCX, DJVU, XLSX, DOC and HTML are routable. A docx renamed to
+`.pdf` converts as docx; a PDF renamed to `.djvu` converts as PDF; an
+xlsx renamed to `.docx` stays xlsx; HTML files wearing a `.doc` extension
+route as HTML. Adding a format means one registry entry in
+`src/pdf_router/formats.py`; nothing downstream changes.
 
 DOCX is parsed **natively** (stdlib `zipfile` + ElementTree, ADR-0003):
 `w:pStyle` resolves through `word/styles.xml` to exact heading levels,
@@ -99,6 +104,19 @@ whole document is one pageless IR page (`source_format="docx"`,
 `pdf_type="text_based"`, confidence 1.0 — no OCR pass exists or is
 needed). No external binaries, milliseconds per document; scanned docx
 is out of scope (not present in the corpus).
+
+XLSX, DOC and HTML share [ADR-0008](docs/adr/0008-office-ingest.md).
+**XLSX** is parsed natively (stdlib `zipfile` + ElementTree): one IR page
+per sheet (`## <sheet name>`), dense rows become `TableBlock`s, sparse
+rows prose, hidden columns/rows cut, merged cells repeat down / keep the
+first cell sideways, formulas publish their cached values. **DOC** parses
+in-process via the pinned `office-oxide==0.1.12` wheel: tables keep
+LibreOffice-exact row counts, headings are best-effort (honest gap:
+1 of 42 on the 56 MB anchor), images become sidecar files. **HTML**
+files (the 7 law documents saved with a `.doc` extension) get a minimal
+stdlib tag-strip: prose paragraphs, `<h1>`–`<h6>` headings, nothing else
+claimed. All three are born-digital: `pdf_type="text_based"`, one page
+(DOC/HTML) or one page per sheet (XLSX), no OCR pass.
 
 DJVU is ingested **natively** (djvulibre subprocess adapter, ADR-0004) —
 no intermediate PDF is ever written: pages, hidden text layer and stored
@@ -186,10 +204,11 @@ name — is a `ConfigError` at load, before any page is processed.
 
 - **One** `process_pdf` call — the format gate (`formats.route()`) picks
   the inspector (PDF → pdf-inspector adapter; DOCX → the native stdlib
-  adapter; DJVU → the djvulibre subprocess adapter).
+  adapter; DJVU → the djvulibre subprocess adapter; XLSX → the native
+  stdlib adapter; DOC → office-oxide; HTML → stdlib tag-strip).
 - **Zero or more** OCR calls per PDF/DJVU page, via the single configured
   `[routing].ocr_fallback_engine` (params from its `[ocr.*]` section).
-  DOCX is born-digital — no OCR pass exists for it.
+  DOCX/XLSX/DOC/HTML are born-digital — no OCR pass exists for them.
 - **Zero or one** structure pass per OCR'd page (`structure.py`):
   rapidocr line geometry + the lineless/wired table engine →
   `TableBlock`s; box-height heuristic → `HeadingBlock`s (ADR-0005).
@@ -197,13 +216,13 @@ name — is a `ConfigError` at load, before any page is processed.
 
 See `docs/glossary.md` for terms and `docs/adr/` for design decisions.
 
-## IR contract (0.5)
+## IR contract (0.6)
 
 ```python
 {
-  "ir_version": "0.5",
+  "ir_version": "0.6",
   "metadata": {
-    "source_format": "pdf" | "docx" | "djvu",   # the container format
+    "source_format": "pdf" | "docx" | "djvu" | "xlsx" | "doc" | "html",
     "source_path": str | null,      # the input path (filled by core, 0.5.1)
     "pdf_type": "text_based" | "scanned" | "image_based" | "mixed",
     "page_count": int,
@@ -215,9 +234,9 @@ See `docs/glossary.md` for terms and `docs/adr/` for design decisions.
     {
       "page": int,                    # 0-indexed; docx = single page 0
       "markdown": str,                # authoritative for md/chunks renderers
-      "src_tool": "pdf_inspector" | "docx_adapter" | "djvu_adapter" | "djvu_text_layer" | ...,
+      "src_tool": "pdf_inspector" | "docx_adapter" | "djvu_adapter" | "djvu_text_layer" | "xlsx_adapter" | "doc_adapter" | "html_adapter" | ...,
       "blocks": [                     # advisory
-        {"kind": "HeadingBlock", "level": int, "text": str, "bbox": {...} | null, "source": "structure_tree"|"font_size_fallback"|"docx_style"|"ocr_box_height"|"ocr_glm_layout"},
+        {"kind": "HeadingBlock", "level": int, "text": str, "bbox": {...} | null, "source": "structure_tree"|"font_size_fallback"|"docx_style"|"oxide_style"|"html_tag"|"ocr_box_height"|"ocr_glm_layout"},
         {"kind": "TableBlock", "markdown": str, "rows": list[list[str]], "header_rows": int, "bbox": ..., "source": "markdown_pipe"|"ocr_table_lineless"|"ocr_table_wired"|"ocr_pipe_fallback"|"ocr_glm_layout"},
         {"kind": "FigureBlock", "bbox": null, "caption": str | null, "image_index": int | null},
         ...
@@ -229,7 +248,8 @@ See `docs/glossary.md` for terms and `docs/adr/` for design decisions.
 
 `PageResult.markdown` is preserved verbatim from the inspector (PDF:
 pdf-inspector; DOCX: the native adapter; DJVU: the hidden text layer or
-empty); `blocks` is a structural decomposition populated when the adapter
+empty; XLSX/DOC/HTML: their adapters); `blocks` is a structural
+decomposition populated when the adapter
 has upstream data for it — and, since IR 0.5, by the **post-OCR structure
 pass**: every OCR'd page (scanned PDF or layerless djvu) grows real
 `TableBlock`s (RapidAI TableStructureRec over the rapidocr line geometry)
@@ -247,6 +267,13 @@ five OCR values, and scanned pages get real blocks
 ([ADR-0005](docs/adr/0005-ocr-structure.md)). Loading an 0.5 payload with
 an older reader raises `ValueError` — that is the version bump doing its
 job.
+
+IR 0.6 (office ingest, [ADR-0008](docs/adr/0008-office-ingest.md)) adds
+`"xlsx"`, `"doc"` and `"html"` to `source_format` and three `SrcTool`
+values (`xlsx_adapter`, `doc_adapter`, `html_adapter`); a `.doc`
+document and an HTML file are a single IR page each, xlsx keeps one IR
+page per sheet. Loading a 0.6 payload with a pre-0.6 reader raises
+`ValueError` on the new enum values — same mechanism.
 
 ## RAG chunks (envelope v2)
 
@@ -319,6 +346,10 @@ src/pdf_router/
     pdf_inspector.py    # PDF: always-loaded (text path + structural blocks)
     docx.py             # DOCX: native stdlib parser (ADR-0003)
     djvu.py             # DJVU: djvulibre subprocess adapter (ADR-0004)
+    ooxml.py            # shared OOXML zip/rels/markdown helpers (ADR-0008)
+    xlsx.py             # XLSX: native stdlib parser (ADR-0008)
+    doc.py              # legacy DOC: office-oxide binding (ADR-0008)
+    html.py             # HTML-as-.doc: stdlib tag-strip (ADR-0008)
   rasterize.py          # format-aware page raster seam (pymupdf | ddjvu)
   ocr.py                # flat OCR engines: rapidocr/pdf_inspector_ocr/tesseract/glm/deepseek
   structure.py          # post-OCR structure pass: tables (lineless/wired) + headings (ADR-0005)
@@ -329,6 +360,10 @@ tests/
   test_ir_structural_blocks.py  # IR 0.2 block anchors (p5 + ТКР1)
   test_docx.py                  # docx: synthetic control + golden volumes
   test_djvu.py                  # djvu: fixtures, seam, layer policy, corpus slow tier
+  test_xlsx.py                  # xlsx: synthetic control + corpus anchors (ADR-0008)
+  test_doc.py                   # legacy .doc: corrupt gate + corpus anchors (ADR-0008)
+  test_html.py                  # HTML-as-.doc: synthetic control + law anchor (ADR-0008)
+  test_formats.py               # format gate: magic bytes, rejections, registry
   test_p5.py, test_p27.py, test_big_test.py   # golden anchors
   test_api.py                   # public-surface contract + import-cost guard
   test_renderers.py, test_conventions.py, ...

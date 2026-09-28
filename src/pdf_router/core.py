@@ -1,9 +1,10 @@
 """v0.4 routing pipeline — flat functions, no adapter classes.
 
-Design (TKT-RT-01, extended by ADR-0003 and ADR-0004):
+Design (TKT-RT-01, extended by ADR-0003, ADR-0004 and ADR-0008):
 1. route(pdf_path) — the format dispatcher picks the adapter (PDF →
    pdf-inspector; DOCX → the native stdlib inspector; DJVU → the native
-   djvulibre subprocess inspector, ADR-0004).
+   djvulibre subprocess inspector, ADR-0004; XLSX → the native stdlib
+   inspector, ADR-0008).
 2. For each page, in parallel (ThreadPoolExecutor):
    - extract_images_for_page: raster + vector images (PDF) or media parts
      (docx), independent of text. djvu: no image pass at all — a djvu page
@@ -28,7 +29,9 @@ Key decisions:
   through pdf_router.formats (the dispatcher owns format -> adapter).
 - Sidecar image extraction is dispatched on Metadata.source_format (IR 0.3):
   PDF → extract_images.extract_page_images, DOCX → the docx adapter's
-  extract_docx_images, DJVU → none (images stay []). This is pipeline
+  extract_docx_images, DOC → the doc adapter's extract_doc_images
+  (office-oxide base64 payloads → files), DJVU/XLSX/HTML → none (images
+  stay []; the xlsx/html corpora have 0 media, ADR-0008). This is pipeline
   machinery, not a second registry — the inspector registry (formats.py)
   stays path -> IR only.
 """
@@ -287,7 +290,14 @@ def process_pdf(
                     img_fut = pool.submit(
                         extract_docx_images, page, pdf_path, output_dir
                     )
-                # djvu: img_fut stays None — page.images = [] (TKT-DJV-06).
+                elif source_format == "doc":
+                    from pdf_router.adapters.doc import extract_doc_images
+
+                    img_fut = pool.submit(
+                        extract_doc_images, page, pdf_path, output_dir
+                    )
+                # djvu/xlsx/html: img_fut stays None — page.images = []
+                # (TKT-DJV-06; xlsx/html have no media, ADR-0008).
             txt_fut = (
                 pool.submit(text_worker, page, pdf_path, config)
                 if run_text_pass

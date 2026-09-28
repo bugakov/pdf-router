@@ -49,6 +49,14 @@ tolerates its absence so IR ≤ 0.5 payloads keep loading. The chunks
 renderer derives ``doc_id`` (12-hex SHA-256 of the resolved absolute
 path, the TKT-RT-12 sidecar schema) and ``doc_title`` (``title`` →
 basename fallback) from it.
+
+IR 0.6 (ADR-0008, office ingest): ``source_format`` gains "xlsx", "doc"
+and "html"; ``SrcTool.XLSX_ADAPTER``, ``SrcTool.DOC_ADAPTER`` and
+``SrcTool.HTML_ADAPTER`` tag their pages (a .doc document is one IR page
+— ``page_count`` stays 1; xlsx keeps one IR page per sheet). Loading an
+IR 0.6 payload with an older reader raises ``ValueError`` on the new
+enum values: the bump makes the provenance addition visible instead of
+silently corrupting it.
 """
 
 from __future__ import annotations
@@ -57,7 +65,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
 
-IR_VERSION = "0.5"
+IR_VERSION = "0.6"
 
 
 class SrcTool(str, Enum):
@@ -72,6 +80,9 @@ class SrcTool(str, Enum):
     DOCX_ADAPTER = "docx_adapter"
     DJVU_ADAPTER = "djvu_adapter"
     DJVU_TEXT_LAYER = "djvu_text_layer"
+    XLSX_ADAPTER = "xlsx_adapter"
+    DOC_ADAPTER = "doc_adapter"
+    HTML_ADAPTER = "html_adapter"
 
 
 @dataclass
@@ -89,7 +100,8 @@ class Metadata:
     ``pdf_type`` keeps its PDF-native vocabulary (text_based | scanned |
     image_based | mixed) — it is honest about *how the text was obtained*.
     Which container the text came from is ``source_format`` (IR 0.3):
-    "pdf" | "docx". A docx page is born-digital, so adapters report
+    "pdf" | "docx" | "djvu" | "xlsx" | "doc" | "html". A docx/xlsx/doc/html
+    page is born-digital, so adapters report
     ``pdf_type="text_based"`` with ``confidence=1.0`` — no OCR happened.
     A djvu page is a raster scan by nature (ADR-0004): adapters report
     ``pdf_type="scanned"`` with ``confidence=1.0``; per-page ``src_tool``
@@ -107,7 +119,7 @@ class Metadata:
     pages_with_columns: list[int] = field(default_factory=list)  # 1-indexed
     pages_needing_ocr: list[int] = field(default_factory=list)  # 1-indexed
     ocr_reasons_by_page: list[OcrReasonEntry] = field(default_factory=list)
-    source_format: str = "pdf"  # IR 0.3: "pdf" | "docx"; IR 0.4 adds "djvu"
+    source_format: str = "pdf"  # IR 0.3: "pdf"|"docx"; IR 0.4 "djvu"; IR 0.6 "xlsx"|"doc"|"html"
     # IR 0.5.1 (additive, ADR-0006): the input path as given to
     # core.process_pdf. Filled by core only — adapters stay path-agnostic
     # (their contract is one callable path -> IR, and legacy adapters are

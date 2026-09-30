@@ -72,6 +72,10 @@ class SrcTool(str, Enum):
     """Provenance tag: which tool produced a page's markdown."""
 
     PDF_INSPECTOR = "pdf_inspector"
+    #: A text layer that exists but cannot be decoded to real text (subset
+    #: font without /ToUnicode). The page carries no usable markdown, and —
+    #: unless the operator asks for it — no OCR was spent on it either.
+    TEXT_LAYER_UNUSABLE = "text_layer_unusable"
     RAPIDOCR = "rapidocr"
     PDF_INSPECTOR_OCR = "pdf_inspector_ocr"
     TESSERACT = "tesseract"
@@ -119,6 +123,12 @@ class Metadata:
     pages_with_columns: list[int] = field(default_factory=list)  # 1-indexed
     pages_needing_ocr: list[int] = field(default_factory=list)  # 1-indexed
     ocr_reasons_by_page: list[OcrReasonEntry] = field(default_factory=list)
+    # Pages whose text layer is present but undecodable (subset font without
+    # /ToUnicode), 1-indexed. They carry NO markdown: the router refuses to
+    # commit code soup as knowledge and, by default, refuses to pay OCR for
+    # it too (routing.garbled_text_policy="drop"). Re-running with
+    # "ocr" is how an operator buys the text back, deliberately.
+    unusable_text_pages: list[int] = field(default_factory=list)
     source_format: str = "pdf"  # IR 0.3: "pdf"|"docx"; IR 0.4 "djvu"; IR 0.6 "xlsx"|"doc"|"html"
     # IR 0.5.1 (additive, ADR-0006): the input path as given to
     # core.process_pdf. Filled by core only — adapters stay path-agnostic
@@ -333,6 +343,7 @@ def from_dict(d: dict[str, Any]) -> IR:
         pages_with_tables=list(md.get("pages_with_tables", [])),
         pages_with_columns=list(md.get("pages_with_columns", [])),
         pages_needing_ocr=list(md.get("pages_needing_ocr", [])),
+        unusable_text_pages=list(md.get("unusable_text_pages", [])),
         ocr_reasons_by_page=[
             OcrReasonEntry(page=int(e["page"]), reasons=list(e.get("reasons", [])))
             for e in md.get("ocr_reasons_by_page", [])

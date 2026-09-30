@@ -119,6 +119,13 @@ class RoutingConfig:
     # only combination that actually recognizes Cyrillic (validated in
     # TKT-OC-02; pdf_inspector_ocr's dictionary has zero Cyrillic tokens).
     ocr_fallback_engine: str = "rapidocr"
+    # What to do with a page whose text layer exists but cannot be decoded
+    # (subset font without /ToUnicode). "drop" (default) refuses to commit
+    # the code soup AND spends no OCR on it — the page is reported in
+    # metadata.unusable_text_pages and counted in report.pages_unusable.
+    # "ocr" buys the text back with a real OCR pass, at real cost: one
+    # page of rasterization + recognition per affected page.
+    garbled_text_policy: str = "drop"
 
 
 @dataclass

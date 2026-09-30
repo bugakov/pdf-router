@@ -52,7 +52,7 @@ from typing import Any
 from pdf_router.config import RouterConfig
 from pdf_router.formats import route
 from pdf_router.ir import IR, SrcTool
-from pdf_router.quality import looks_like_text
+from pdf_router.quality import looks_like_text, looks_garbled
 from pdf_router.ocr import ocr_page, OcrError
 from pdf_router.ocr_cache import _md5_of, params_fingerprint
 from pdf_router.extract_images import extract_page_images
@@ -108,6 +108,10 @@ class ProcessingReport:
     #: OCR pages served from the content-addressed cache (ADR-0007) —
     #: included in pages_ocr, so total counts stay unchanged.
     pages_ocr_cached: int = 0
+    #: Pages whose text layer was present but undecodable, dropped rather
+    #: than OCR'd (routing.garbled_text_policy="drop"). They count as
+    #: neither native nor OCR — the text they carry is not knowledge.
+    pages_unusable: int = 0
 
 
 def _engine_to_src_tool(engine: str) -> SrcTool:
@@ -261,12 +265,15 @@ def process_pdf(
     # ADR-0007: bind the cache context via partial only when a cache is in
     # play — the plain path keeps the historical 3-positional-arg call so
     # existing tests can keep patching _process_text_for_page(page, path, cfg).
+    # suspect_encoding rides along only for a document the inspector flagged
+    # for encoding trouble: it is what unlocks the looks_garbled check.
+    _extra: dict[str, Any] = {}
+    if ocr_cache is not None:
+        _extra.update(ocr_cache=ocr_cache, digest=digest)
+    if getattr(doc.metadata, "has_encoding_issues", False):
+        _extra["suspect_encoding"] = True
     text_worker = (
-        functools.partial(
-            _process_text_for_page, ocr_cache=ocr_cache, digest=digest
-        )
-        if ocr_cache is not None
-        else _process_text_for_page
+        functools.partial(_process_text_for_page, **_extra) if _extra else _process_text_for_page
     )
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = []  # list of (page, img_fut, txt_fut)
@@ -388,10 +395,26 @@ def process_pdf(
             report.pages_failed += 1
         elif page.error:
             report.pages_failed += 1
+        elif page.src_tool == SrcTool.TEXT_LAYER_UNUSABLE:
+            report.pages_unusable += 1
         elif page.needs_ocr:
             report.pages_ocr += 1
         else:
             report.pages_native += 1
+
+    doc.metadata.unusable_text_pages = [
+        p.page + 1
+        for p in doc.pages
+        if p.error is None and p.src_tool == SrcTool.TEXT_LAYER_UNUSABLE
+    ]
+    if report.pages_unusable:
+        logger.warning(
+            "%d page(s) carry an undecodable text layer and were dropped "
+            "(routing.garbled_text_policy=%r): pages %s",
+            report.pages_unusable,
+            routing_cfg.garbled_text_policy,
+            doc.metadata.unusable_text_pages[:20],
+        )
 
     elapsed = time.perf_counter() - t0
     logger.info(
@@ -417,6 +440,7 @@ def _process_text_for_page(
     config: RouterConfig,
     ocr_cache: "Any | None" = None,
     digest: "_LazyDigest | None" = None,
+    suspect_encoding: bool = False,
 ) -> bool:
     """Mutate page in-place: markdown, src_tool, error.
 
@@ -433,6 +457,12 @@ def _process_text_for_page(
     5. Otherwise: rasterize page once (format-aware seam) + run OCR via
        ocr_page(). A junky djvu text layer falls back here with reason
        low_text_quality — the layer is not trusted over real OCR.
+
+    A text layer that passes looks_like_text can still be undecodable: a
+    subset font without /ToUnicode passes any alpha-ratio check while
+    carrying zero readable characters. When the document is flagged
+    ``has_encoding_issues``, looks_garbled gets the last word — see
+    ``routing.garbled_text_policy`` for what happens then.
     """
     needs_ocr_from_inspector = page.needs_ocr
 
@@ -454,6 +484,20 @@ def _process_text_for_page(
             language=config.routing.language,
             threshold=config.routing.text_alpha_threshold,
         ):
+            # The layer is text-shaped, but is it READABLE? Only worth asking
+            # of a document the inspector already flagged for encoding
+            # trouble — a clean book never reaches this test at all.
+            if suspect_encoding and looks_garbled(page_text):
+                if config.routing.garbled_text_policy == "ocr":
+                    page.ocr_reason = "garbled_text_layer"
+                else:
+                    # Drop, don't OCR: code soup is not knowledge, and a
+                    # rasterization + recognition pass on a page we already
+                    # know we cannot read is money spent on a guess.
+                    page.markdown = ""
+                    page.blocks = []
+                    page.src_tool = SrcTool.TEXT_LAYER_UNUSABLE
+                    return False
             return False  # native text is fine
         page.ocr_reason = "low_text_quality"
     else:

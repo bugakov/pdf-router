@@ -232,3 +232,17 @@ def test_malformed_toml_raises(tmp_path) -> None:
     toml.write_text("this is [not valid toml", encoding="utf-8")
     with pytest.raises(ConfigError, match="malformed TOML"):
         RouterConfig.from_toml(toml)
+
+
+def test_garbled_text_policy_read_from_toml(tmp_path) -> None:
+    """The policy is a RoutingConfig field, so TOML must be able to set it."""
+    toml = tmp_path / "router.toml"
+    toml.write_text(
+        """
+[routing]
+garbled_text_policy = "ocr"
+""",
+        encoding="utf-8",
+    )
+    cfg = RouterConfig.from_toml(toml)
+    assert cfg.routing.garbled_text_policy == "ocr"

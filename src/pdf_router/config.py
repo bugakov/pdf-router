@@ -51,6 +51,7 @@ _KNOWN_ROUTING_KEYS = {
     "images_min_size",
     "images_min_thin",
     "ocr_fallback_engine",
+    "garbled_text_policy",
 }
 _KNOWN_STRUCTURE_KEYS = {"table_engine", "heading_big_ratio", "heading_small_ratio"}
 
@@ -347,6 +348,11 @@ def _parse_routing(sec: Any) -> RoutingConfig:
         cfg.images_min_thin = int(sec["images_min_thin"])
     if "ocr_fallback_engine" in sec:
         cfg.ocr_fallback_engine = str(sec["ocr_fallback_engine"])
+    # garbled_text_policy was added to RoutingConfig but never read here, so
+    # the policy was unsettable from TOML (unknown keys only warn — silently
+    # ignored). Register + parse it.
+    if "garbled_text_policy" in sec:
+        cfg.garbled_text_policy = str(sec["garbled_text_policy"])
 
     return cfg
 

@@ -34,6 +34,34 @@ logger = logging.getLogger("pdf_router")
 # threshold filters them out. Calibrated against big_test.pdf pages 26-44.
 _MIN_DIAGRAM_AREA = 500.0  # ~22×22 pt
 
+#: Drop a raster when BOTH sides are below this (icons, thumbnails,
+#: bullets) — calibrated on the S3 corpus 2026-10-01 (300+300 sampled
+#: images, boundary cases inspected visually). Zero disables the rule.
+#: The production consumer (litdb parse_worker) imports these as the
+#: calibrated values; the function/config defaults stay 0 = off.
+MIN_PHOTO_SIZE = 150
+
+#: Drop a raster when its THIN side is below this (separator rules,
+#: frames) — same calibration. Zero disables the rule.
+MIN_PHOTO_THIN = 8
+
+
+def keep_raster_photo(w: int, h: int, *, min_size: int = 0, min_thin: int = 0) -> bool:
+    """True if a raster of ``w``×``h`` px is worth extracting.
+
+    Pure predicate (no IO): the TDD seam for the size gate. The rule is
+    exactly "both sides small" OR "thin side sliver" — deliberately no
+    degenerate-size special case, so with both thresholds at 0 the predicate
+    keeps everything (library default, no behaviour change for existing
+    consumers unless they opt in). Doubtful content (narrow charts,
+    panoramas, tall strips) is kept; only proven junk goes.
+    """
+    if min_size > 0 and w < min_size and h < min_size:
+        return False
+    if min_thin > 0 and min(w, h) < min_thin:
+        return False
+    return True
+
 
 def doc_id_from_path(pdf_path: str) -> str:
     """12-char hex SHA-256 of the absolute PDF path — stable across runs."""
@@ -55,16 +83,19 @@ def extract_page_images(
     *,
     raster: bool,
     vector: bool,
-) -> list[str]:
+    min_size: int = 0,
+    min_thin: int = 0,
+) -> tuple[list[str], int]:
     """Extract raster photos and/or vector diagrams from one page.
 
     Opens the PDF once and runs the requested passes against that single
-    handle. Returns a list of relative paths from ``output_dir`` (e.g.
-    ``abcdef123456/images/page0001_photo_00.png``); ``[]`` when both flags
-    are off or the page yields nothing.
+    handle. Returns ``(saved, dropped)``: relative paths from ``output_dir``
+    (e.g. ``abcdef123456/images/page0001_photo_00.png``) plus the count of
+    rasters refused by the size gate. ``([], 0)`` when both flags are off
+    or the page yields nothing.
     """
     if not raster and not vector:
-        return []
+        return [], 0
 
     import pymupdf
 
@@ -72,15 +103,19 @@ def extract_page_images(
     img_dir = page_images_dir(output_dir, did)
 
     saved: list[str] = []
+    dropped = 0
     doc = pymupdf.open(pdf_path)
     try:
         pymupdf_page = doc[page.page]
         if pymupdf_page is None:
-            return []
+            return [], 0
         if raster:
-            saved.extend(
-                _extract_raster_photos(doc, pymupdf_page, page, output_dir, img_dir)
+            s, d = _extract_raster_photos(
+                doc, pymupdf_page, page, output_dir, img_dir,
+                min_size=min_size, min_thin=min_thin,
             )
+            saved.extend(s)
+            dropped += d
         if vector:
             saved.extend(
                 _extract_vector_diagrams(pymupdf_page, page, output_dir, img_dir)
@@ -88,7 +123,7 @@ def extract_page_images(
     finally:
         doc.close()
 
-    return saved
+    return saved, dropped
 
 
 # ---------------------------------------------------------------------------
@@ -102,29 +137,47 @@ def _extract_raster_photos(
     page: PageResult,
     output_dir: Path,
     img_dir: Path,
-) -> list[str]:
+    *,
+    min_size: int = 0,
+    min_thin: int = 0,
+) -> tuple[list[str], int]:
     """Extract embedded raster images (JPEG, PNG, etc.) from an open page.
 
-    Returns ``[]`` if the page has no images, or if the only image covers
-    >= 80% of the page area (page-background scan — not useful for RAG).
+    Returns ``(saved, dropped)``. ``[]`` (and 0) if the page has no images,
+    or if the only image covers >= 80% of the page area (page-background
+    scan — not useful for RAG). Rasters refused by the size gate
+    (``keep_raster_photo``) are counted in ``dropped``, never written.
     The raster is decoded via PyMuPDF's ``Document.extract_image(xref)``.
     """
     raw_images = pymupdf_page.get_images(full=True)
     if not raw_images:
-        return []
+        return [], 0
 
     page_area = pymupdf_page.rect.width * pymupdf_page.rect.height
 
     saved: list[str] = []
+    dropped = 0
     photo_count = 0
 
-    for xref, *rest in raw_images:
-        # rest: width, height, bpc, colorspace, xref_name, smask, fname, compress
-        img_width = rest[0]
-        img_height = rest[1]
+    for xref, _smask, img_width, img_height, *_ in raw_images:
+        # NB: get_images(full=True) yields
+        # (xref, smask, width, height, bpc, colorspace, alt, name, filter) —
+        # skipping smask is load-bearing: reading rest[0]/rest[1] as dims
+        # silently compared (smask × width) to the page area and fed the
+        # size gate garbage (smask is 0 for most images, i.e. width 0).
 
-        # Filter: page-background scan (>= 80% page area).
+        # Filter: page-background scan (>= 80% page area). Counted as
+        # dropped too — images_dropped is every raster refused, whichever
+        # filter refused it, so tuning against the counter stays honest.
         if img_width * img_height >= 0.80 * page_area:
+            dropped += 1
+            continue
+
+        # Filter: size gate — icons, thumbnails, separator rules.
+        if not keep_raster_photo(
+            img_width, img_height, min_size=min_size, min_thin=min_thin
+        ):
+            dropped += 1
             continue
 
         try:
@@ -145,7 +198,7 @@ def _extract_raster_photos(
         saved.append(str(fpath.relative_to(output_dir)))
         photo_count += 1
 
-    return saved
+    return saved, dropped
 
 
 # ---------------------------------------------------------------------------

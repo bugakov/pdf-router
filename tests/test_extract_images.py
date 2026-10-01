@@ -66,7 +66,7 @@ def test_extract_page_images_raster_writes_sidecar(monkeypatch) -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         out_dir = Path(tmp)
-        saved = extract_page_images(
+        saved, _dropped = extract_page_images(
             PageResult(page=0), str(PZU), out_dir, raster=True, vector=False
         )
         assert saved, "expected at least one image on pzu page 1"
@@ -87,10 +87,10 @@ def test_extract_page_images_no_flags_noop() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         out_dir = Path(tmp)
-        saved = extract_page_images(
+        saved, dropped = extract_page_images(
             PageResult(page=0), str(PZU), out_dir, raster=False, vector=False
         )
-        assert saved == []
+        assert (saved, dropped) == ([], 0)
         assert list(out_dir.iterdir()) == [], "no-op must not create sidecar dirs"
 
 
@@ -114,11 +114,12 @@ def test_extract_page_images_opens_pdf_once(monkeypatch) -> None:
     monkeypatch.setattr(pymupdf, "open", counting_open)
 
     with tempfile.TemporaryDirectory() as tmp:
-        saved = extract_page_images(
+        saved, dropped = extract_page_images(
             PageResult(page=0), str(PZU), Path(tmp), raster=True, vector=True
         )
     assert open_count["n"] == 1, f"expected 1 open, got {open_count['n']}"
     assert isinstance(saved, list)
+    assert isinstance(dropped, int)
 
 
 def test_extract_vector_diagrams_threshold() -> None:

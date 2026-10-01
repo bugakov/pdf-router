@@ -120,6 +120,17 @@ log_level = "info"          # debug | info | warning | error; default "warning"
 # Extract vector diagrams (drawn paths) rendered as PNG. Default: false.
 #extract_vector_diagrams = false
 
+# Size gate for raster sidecars — drop proven junk before it costs S3 PUTs.
+# images_min_size: drop a raster only when BOTH sides are below this
+#   (icons, thumbnails, bullets).
+# images_min_thin: drop a raster when its THIN side is below this
+#   (separator rules, frames).
+# Doubtful content is kept: narrow charts, panoramas and tall strips pass.
+# Default: 0 = off (keep everything). Calibrated defaults live in
+# pdf_router.extract_images as MIN_PHOTO_SIZE / MIN_PHOTO_THIN.
+#images_min_size = 0
+#images_min_thin = 0
+
 # Which OCR engine to call when looks_like_text fails. Must be a known
 # engine name and have a matching [ocr.*] section (rapidocr needs none).
 # Default: "rapidocr".

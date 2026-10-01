@@ -48,6 +48,8 @@ _KNOWN_ROUTING_KEYS = {
     "workers",
     "extract_raster_photos",
     "extract_vector_diagrams",
+    "images_min_size",
+    "images_min_thin",
     "ocr_fallback_engine",
 }
 _KNOWN_STRUCTURE_KEYS = {"table_engine", "heading_big_ratio", "heading_small_ratio"}
@@ -115,6 +117,13 @@ class RoutingConfig:
     workers: int = 2
     extract_raster_photos: bool = True
     extract_vector_diagrams: bool = False
+    # Size gate for raster sidecars: drop proven junk, keep doubtful content.
+    # images_min_size — both sides below this (icons, thumbnails); 0 = off.
+    # images_min_thin — thin side below this (separator rules); 0 = off.
+    # Calibrated on the S3 corpus 2026-10-01; the library default keeps
+    # everything (opt-in per consumer).
+    images_min_size: int = 0
+    images_min_thin: int = 0
     # Default rapidocr: PP-OCRv6 small det + PP-OCRv5 mobile rec is the
     # only combination that actually recognizes Cyrillic (validated in
     # TKT-OC-02; pdf_inspector_ocr's dictionary has zero Cyrillic tokens).
@@ -332,6 +341,10 @@ def _parse_routing(sec: Any) -> RoutingConfig:
         cfg.extract_raster_photos = bool(sec["extract_raster_photos"])
     if "extract_vector_diagrams" in sec:
         cfg.extract_vector_diagrams = bool(sec["extract_vector_diagrams"])
+    if "images_min_size" in sec:
+        cfg.images_min_size = int(sec["images_min_size"])
+    if "images_min_thin" in sec:
+        cfg.images_min_thin = int(sec["images_min_thin"])
     if "ocr_fallback_engine" in sec:
         cfg.ocr_fallback_engine = str(sec["ocr_fallback_engine"])
 

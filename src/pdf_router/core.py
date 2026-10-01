@@ -44,7 +44,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -112,11 +112,27 @@ class ProcessingReport:
     #: than OCR'd (routing.garbled_text_policy="drop"). They count as
     #: neither native nor OCR — the text they carry is not knowledge.
     pages_unusable: int = 0
+    #: Raster sidecars refused (ticket s3-worker-economy/01): the size gate
+    #: (icons, thumbnails, rules) and the page-background filter alike.
+    #: Never written, never uploaded. Tuning the gate reads this counter.
+    images_dropped: int = 0
 
 
 def _engine_to_src_tool(engine: str) -> SrcTool:
     """Map engine name string to SrcTool enum value."""
     return SrcTool(engine)
+
+
+def _collect_page_images(result: Any, source_format: str) -> tuple[list[str], int]:
+    """Split an image-pass result into (saved paths, dropped count).
+
+    pdf returns ``(saved, dropped)`` (size gate); docx/doc return ``[saved]``
+    (no gate there). One place, both collection loops share it.
+    """
+    if source_format == "pdf":
+        saved, dropped = result
+        return saved, dropped
+    return result, 0
 
 
 class _LazyDigest:
@@ -280,7 +296,10 @@ def process_pdf(
         for page in doc.pages:
             # Image extraction only runs when the caller asked for a sidecar
             # directory; otherwise the pass is skipped entirely (pure run).
-            img_fut = None
+            # Heterogeneous futures by format: pdf returns (saved, dropped),
+            # docx/doc return [saved] — annotated at the seam, unpacked per
+            # format at the collection points below.
+            img_fut: Future[Any] | None = None
             if output_dir is not None:
                 if source_format == "pdf":
                     img_fut = pool.submit(
@@ -290,6 +309,8 @@ def process_pdf(
                         output_dir,
                         raster=routing_cfg.extract_raster_photos,
                         vector=routing_cfg.extract_vector_diagrams,
+                        min_size=routing_cfg.images_min_size,
+                        min_thin=routing_cfg.images_min_thin,
                     )
                 elif source_format == "docx":
                     from pdf_router.adapters.docx import extract_docx_images
@@ -318,7 +339,10 @@ def process_pdf(
                 page.images = []  # pure run: no sidecar IO at all
             else:
                 try:
-                    page.images = img_fut.result()
+                    page.images, dropped = _collect_page_images(
+                        img_fut.result(), source_format
+                    )
+                    report.images_dropped += dropped
                 except Exception as exc:
                     logger.error("page %d: image extraction failed: %s", page.page + 1, exc)
                     page.images = []
@@ -367,7 +391,10 @@ def process_pdf(
             if img_fut is not None:
                 if ran_img:
                     try:
-                        page.images = img_fut.result()
+                        page.images, dropped = _collect_page_images(
+                            img_fut.result(), source_format
+                        )
+                        report.images_dropped += dropped
                     except Exception as exc:
                         logger.error(
                             "page %d: image extraction failed: %s", page.page + 1, exc
@@ -418,13 +445,15 @@ def process_pdf(
 
     elapsed = time.perf_counter() - t0
     logger.info(
-        "processed %d pages in %.1fs: %d native, %d OCR, %d failed, %d image-failed",
+        "processed %d pages in %.1fs: %d native, %d OCR, %d failed,"
+        " %d image-failed, %d images-dropped",
         report.pages_total,
         elapsed,
         report.pages_native,
         report.pages_ocr,
         report.pages_failed,
         report.pages_image_failed,
+        report.images_dropped,
     )
     return doc, report
 

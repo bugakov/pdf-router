@@ -270,7 +270,15 @@ def extract_ir(path: str | Path) -> IR:
     pages: list[PageResult] = []
     for pm in pages_result.pages:
         one_indexed = pm.page + 1
-        needs_ocr = one_indexed in metadata.pages_needing_ocr
+        # Флаг «нужно распознавание» приходит ДВУМЯ источниками, и они
+        # расходятся: `process_pdf` даёт список уровня документа, а
+        # `extract_pages_markdown` — постраничный. Для битой кодировки
+        # список документа пуст, а постраничные флаги есть: на
+        # sources/4589.pdf это 11 страниц из 18 с пустым текстом.
+        # Взять только список документа — значит объявить их прочитанными:
+        # `looks_like_text("")` в core.py возвращает True по умыслу, и
+        # текст теряется молча (тикет text-quality/02). Поэтому берём оба.
+        needs_ocr = bool(pm.needs_ocr) or one_indexed in metadata.pages_needing_ocr
         reason_entry = reasons_by_page.get(one_indexed)
         blocks: list[Any] = []
         blocks.extend(_extract_tables_from_markdown(pm.markdown or ""))

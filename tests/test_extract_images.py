@@ -17,7 +17,7 @@ import pytest
 from pdf_router.config import RouterConfig
 from pdf_router.core import process_pdf
 from pdf_router.extract_images import (
-    _MIN_DIAGRAM_AREA,
+    _DEFAULT_VECTOR_MIN_SHARE,
     doc_id_from_path,
     page_images_dir,
 )
@@ -123,10 +123,13 @@ def test_extract_page_images_opens_pdf_once(monkeypatch) -> None:
 
 
 def test_extract_vector_diagrams_threshold() -> None:
-    """Min-area threshold is honored; not directly testable without a real PDF,
-    but we can verify the constant is sane."""
-    assert _MIN_DIAGRAM_AREA > 0
-    assert _MIN_DIAGRAM_AREA < 100_000  # not absurdly large
+    """Порог вектора — доля площади страницы, а не абсолютная площадь.
+
+    0,001 — это прежние 500 pt² на странице A4, то есть поведение по
+    умолчанию сохранено. Реальное различение порогов проверяет
+    test_full_page_rasters.py::test_vector_threshold_is_share_of_page.
+    """
+    assert 0.0 < _DEFAULT_VECTOR_MIN_SHARE < 0.01
 
 
 # --- race-condition guard (regression test) ----------------------------------

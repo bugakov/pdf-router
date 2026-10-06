@@ -48,6 +48,8 @@ _KNOWN_ROUTING_KEYS = {
     "workers",
     "extract_raster_photos",
     "extract_vector_diagrams",
+    "images_full_page_min_ink",
+    "images_vector_min_share",
     "images_min_size",
     "images_min_thin",
     "ocr_fallback_engine",
@@ -123,6 +125,15 @@ class RoutingConfig:
     # images_min_thin — thin side below this (separator rules); 0 = off.
     # Calibrated on the S3 corpus 2026-10-01; the library default keeps
     # everything (opt-in per consumer).
+    #: Доля содержимого, при которой полностраничный растр (>= 80% страницы)
+    #: сохраняется, а не отбрасывается как «фон страницы». 0 = прежнее
+    #: поведение: отбрасывать всегда. Фотография на всю страницу от скана по
+    #: площади неотличима, поэтому при включении страница измеряется по
+    #: отклонению от собственного фона.
+    images_full_page_min_ink: float = 0.0
+    #: Минимальная доля площади страницы для векторного контура. Прежний
+    #: абсолютный порог 500 pt² пропускал засечки осей гистограмм.
+    images_vector_min_share: float = 0.001
     images_min_size: int = 0
     images_min_thin: int = 0
     # Default rapidocr: PP-OCRv6 small det + PP-OCRv5 mobile rec is the
@@ -342,6 +353,10 @@ def _parse_routing(sec: Any) -> RoutingConfig:
         cfg.extract_raster_photos = bool(sec["extract_raster_photos"])
     if "extract_vector_diagrams" in sec:
         cfg.extract_vector_diagrams = bool(sec["extract_vector_diagrams"])
+    if "images_full_page_min_ink" in sec:
+        cfg.images_full_page_min_ink = float(sec["images_full_page_min_ink"])
+    if "images_vector_min_share" in sec:
+        cfg.images_vector_min_share = float(sec["images_vector_min_share"])
     if "images_min_size" in sec:
         cfg.images_min_size = int(sec["images_min_size"])
     if "images_min_thin" in sec:

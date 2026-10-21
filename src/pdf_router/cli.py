@@ -19,11 +19,12 @@ from pdf_router import __version__
 from pdf_router.config import ConfigError, RouterConfig
 from pdf_router.api import wire_pdf_inspector_env, write_outputs
 from pdf_router.formats import Format, UnsupportedFormatError, detect_format
+from pdf_router.renderers import docling as docling_renderer
 
 logger = logging.getLogger("pdf_router")
 
 DEFAULT_CONFIG_NAME = "router.toml"
-VALID_RENDERERS = ("md", "chunks", "json")
+VALID_RENDERERS = ("md", "chunks", "json", "docling")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -41,9 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", metavar="DIR", default=None, help="Output directory (default: out/)")
     parser.add_argument(
         "--render",
-        metavar="md,chunks,json",
+        metavar="md,chunks,json,docling",
         default=None,
-        help="Comma-separated subset of renderers (default: all three)",
+        help="Comma-separated subset of renderers (default: md,chunks,json)",
     )
     parser.add_argument("--info", action="store_true", help="Print metadata JSON only, no render")
     parser.add_argument(
@@ -148,6 +149,15 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if enabled is not None:
         cfg.renderers.enabled = enabled
+    if "docling" in cfg.renderers.enabled:
+        # Fail fast: the docling renderer needs the optional extra, and a
+        # missing extra is a usage error — not something the user should
+        # learn about after the document was processed (OCR included).
+        try:
+            docling_renderer.ensure_available()
+        except docling_renderer.DoclingUnavailableError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
     log_level = (args.log_level or cfg.log_level).upper()
     logging.basicConfig(
         level=getattr(logging, log_level, logging.WARNING),
@@ -205,6 +215,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         write_outputs(ir, out_dir, input_path.stem, config=cfg.renderers)
+    except docling_renderer.DoclingUnavailableError as exc:
+        # The docling renderer needs the optional extra: a usage error
+        # (install the extra), not a document failure.
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     except OSError as exc:
         print(f"error: cannot write output: {exc}", file=sys.stderr)
         return 1

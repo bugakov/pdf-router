@@ -14,8 +14,9 @@ Three levels of control, in increasing depth:
 1. :func:`convert` — one call, returns Markdown. For the 90% case.
 2. :func:`process_pdf` — returns ``(IR, ProcessingReport)``. For callers that
    need provenance, per-page images, or failure counts.
-3. :func:`render_markdown` / :func:`render_chunks` / :func:`render_json` —
-   render an IR you already hold (e.g. one loaded via :func:`from_dict`).
+3. :func:`render_markdown` / :func:`render_chunks` / :func:`render_json` /
+   :func:`render_docling` — render an IR you already hold (e.g. one loaded
+   via :func:`from_dict`).
 
 Four rules this module exists to enforce:
 
@@ -73,11 +74,13 @@ from pdf_router.ir import (
     to_dict,
 )
 from pdf_router.ocr_cache import OcrCache, params_fingerprint
+from pdf_router.renderers.docling import DoclingUnavailableError
 
 logger = logging.getLogger("pdf_router")
 
 __all__ = [
     "ConfigError",
+    "DoclingUnavailableError",
     "OcrCache",
     "PipelineCancelled",
     "ProcessingError",
@@ -89,6 +92,7 @@ __all__ = [
     "params_fingerprint",
     "process_pdf",
     "render_chunks",
+    "render_docling",
     "render_json",
     "render_markdown",
     "wire_pdf_inspector_env",
@@ -346,12 +350,31 @@ def render_json(ir: IR, *, config: RendererConfig | RouterConfig | None = None) 
     return json_renderer.render(ir, config=_coerce_renderer_config(config))
 
 
+def render_docling(ir: IR, *, config: RendererConfig | RouterConfig | None = None) -> str:
+    """Render an IR to a DoclingDocument JSON document (ADR-0009).
+
+    Docling's published format is a *renderer* target, not the IR
+    (ADR-0002): the IR stays the in-process contract, and this function
+    publishes it in the format the Docling ecosystem consumes.
+
+    Requires the ``docling`` extra (``pip install 'pdf-router[docling]'``):
+    docling-core is an optional dependency (it drags in pandas/pillow/
+    typer/doclang — too heavy for the ultra-minimal core), so the import
+    is lazy and a missing extra raises :class:`DoclingUnavailableError`
+    with the install line rather than an opaque ImportError.
+    """
+    from pdf_router.renderers import docling
+
+    return docling.render(ir, config=_coerce_renderer_config(config))
+
+
 #: Renderer name -> function producing its text. Order is irrelevant; the
 #: ``enabled`` set in the config decides what is written.
 _RENDERERS = {
     "md": (render_markdown, ".md"),
     "chunks": (render_chunks, ".chunks.jsonl"),
     "json": (render_json, ".ir.json"),
+    "docling": (render_docling, ".docling.json"),
 }
 
 

@@ -54,6 +54,9 @@ HEAVY_MODULES = (
     "requests",
     "pdf_inspector",
     "office_oxide",
+    # The docling renderer must import docling-core lazily (ADR-0009):
+    # the extra is opt-in, the core package stays cheap.
+    "docling_core",
 )
 
 

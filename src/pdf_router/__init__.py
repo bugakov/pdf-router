@@ -16,6 +16,7 @@ functions, so ``import pdf_router`` stays fast.
 
 from pdf_router.api import (
     ConfigError,
+    DoclingUnavailableError,
     IR,
     IR_VERSION,
     Metadata,
@@ -35,6 +36,7 @@ from pdf_router.api import (
     params_fingerprint,
     process_pdf,
     render_chunks,
+    render_docling,
     render_json,
     render_markdown,
     to_dict,
@@ -51,12 +53,14 @@ __all__ = [
     "load_config",
     "process_pdf",
     "render_chunks",
+    "render_docling",
     "render_json",
     "render_markdown",
     "wire_pdf_inspector_env",
     "write_outputs",
     # Errors
     "ConfigError",
+    "DoclingUnavailableError",
     "PipelineCancelled",
     "ProcessingError",
     "UnsupportedFormatError",

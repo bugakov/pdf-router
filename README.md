@@ -4,7 +4,8 @@ Ultra-minimal, deterministic PDF/DOCX/XLSX/DOC/HTML/DJVU → LLM-ready Markdown 
 
 Primary inputs: scientific journals, monographs, project documentation.
 Output: per-page markdown (with optional page markers), RAG-ready JSONL
-chunks, and a serialized IR (dataclass → JSON).
+chunks, a serialized IR (dataclass → JSON) and — opt-in — a Docling
+document (interchange format, ADR-0009).
 
 ## Install
 
@@ -12,6 +13,7 @@ chunks, and a serialized IR (dataclass → JSON).
 uv sync                       # core only (pdf-inspector + pymupdf)
 uv sync --extra tesseract     # local tesseract OCR
 uv sync --extra cloud         # cloud OCR (glm-ocr, deepseek-ocr)
+uv sync --extra docling       # Docling interchange renderer (ADR-0009)
 uv sync --extra dev           # pytest + ruff + mypy (lint/types/CI gate)
 ```
 
@@ -38,6 +40,9 @@ pdf-router path/to/приложение.doc
 
 # Only the markdown output
 pdf-router --render md path/to/file.pdf
+
+# The Docling interchange document (needs the `docling` extra)
+pdf-router --render docling path/to/file.pdf
 
 # Page markers in markdown
 pdf-router --render md --render-opts '{"page_markers": true}' path/to/file.pdf
@@ -315,6 +320,53 @@ TOML: `[renderers.chunks] max_tokens, overlap_tokens, summary =
 "facts"|"none", embed_context` (see `router.toml.example`). Same IR in,
 byte-identical JSONL out.
 
+## Docling interchange (opt-in)
+
+The `docling` renderer publishes the IR as a **DoclingDocument** — the
+format the [Docling](https://github.com/docling-project/docling) ecosystem
+reads ([ADR-0009](docs/adr/0009-docling-renderer.md)). It is a *published
+format*, not the IR (ADR-0002's layering rule): the IR stays the in-process
+contract, the renderer translates.
+
+```sh
+uv sync --extra docling
+pdf-router --render docling path/to/file.pdf   # -> file.docling.json
+```
+
+```python
+import pdf_router
+
+ir, report = pdf_router.process_pdf("scan.pdf")
+docling_json = pdf_router.render_docling(ir)   # str: a DoclingDocument
+```
+
+`docling-core` is an **optional extra** (it drags in pandas/pillow/typer/
+doclang — too heavy for the ultra-minimal core), so the renderer is lazy:
+`import pdf_router` stays cheap, and a missing extra raises
+`DoclingUnavailableError` with the install line, not an opaque ImportError.
+The CLI checks the extra **before** processing the document — a missing
+extra is a usage error (exit 1), not a surprise after a full OCR run.
+The `docling` renderer is **not** in the default renderer set — a normal
+run never needs the extra.
+
+Mapping rules (the full contract lives in the module docstring):
+
+- **The markdown is the spine, the blocks enrich it.** The page markdown
+  gives the item order; a matching `HeadingBlock` upgrades the heading
+  level, a matching `TableBlock` upgrades the table grid, a `FigureBlock`
+  becomes a picture with its sidecar, a `FormulaBlock` a formula item.
+- **OCR pages: the blocks win.** On a scanned page the markdown pipe table
+  is the scrambled twin of the `TableBlock` (ADR-0005) — the twin is
+  dropped, the block's grid is emitted.
+- **Provenance only when the geometry is honest.** docling clamps every
+  bbox to the page size, so a page of unknown size (every page today —
+  `page_bbox` is opt-in) gets no `ProvenanceItem` at all; OCR bboxes are
+  raster pixels and never become provenance either.
+- **No file reads.** The renderer is a pure function: `origin` stays unset
+  (docling wants a sha256 of the source binary there, and only the
+  pipeline may read the input), and the sidecar image paths are copied
+  from the IR as-is.
+
 ## Indexing
 
 - **1-indexed** (matches pdf-inspector): `metadata.pages_with_*`,
@@ -355,6 +407,7 @@ src/pdf_router/
   structure.py          # post-OCR structure pass: tables (lineless/wired) + headings (ADR-0005)
   renderers/
     md.py, chunks.py (RAG envelope v2, ADR-0006), json_renderer.py
+    docling.py           # DoclingDocument interchange renderer (ADR-0009)
 tests/
   test_ir.py                    # IR round-trip (incl. source_path)
   test_ir_structural_blocks.py  # IR 0.2 block anchors (p5 + ТКР1)
@@ -368,6 +421,7 @@ tests/
   test_api.py                   # public-surface contract + import-cost guard
   test_renderers.py, test_conventions.py, ...
   test_chunks_rag.py            # chunks quality bar: fast/middle/slow tiers (ADR-0006)
+  test_docling_renderer.py      # docling interchange: mapping rules + schema gate (ADR-0009)
 docs/
   glossary.md           # terms
   adr/0001-ir-structural-blocks.md

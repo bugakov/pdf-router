@@ -50,6 +50,23 @@ A rectangle in PDF page-coordinate space defining the visible region of a
 page. pdf-inspector 1.17+ returns positions relative to `MediaBox ∩
 CropBox`; this changed in 1.17.0 (CHANGELOG).
 
+## Docling document (DoclingDocument)
+
+The interchange container the `docling` renderer publishes
+([ADR-0009](adr/0009-docling-renderer.md),
+`src/pdf_router/renderers/docling.py`): docling-core's typed tree of items
+(text, section headers, list items, tables, pictures, formulas) with page
+provenance. A **published format**, not the IR (ADR-0002's layering rule):
+the renderer translates the IR into it, the IR stays the in-process
+contract. `docling-core` is an optional extra (`uv sync --extra
+docling`) — the import is lazy, and the renderer is **not** in the default
+renderer set. Mapping rules: the page markdown is the spine (item
+order), the blocks enrich it (heading level, exact table grid, figure →
+picture, formula), on OCR pages the block's grid replaces the markdown's
+pipe twin (ADR-0005), and a `ProvenanceItem` is emitted only when the
+geometry is honest (known page size, native bbox — docling clamps bboxes
+to the page size, and OCR bboxes are raster pixels).
+
 ## Format dispatch
 
 The multi-format seam (`src/pdf_router/formats.py`): `detect_format()`
@@ -181,11 +198,13 @@ non-PDF input with a typed error before touching its Rust core.
 
 ## Renderer
 
-A pure function `(ir, *, config) -> str`. Three renderers: `md`
+A pure function `(ir, *, config) -> str`. Four renderers: `md`
 (`src/pdf_router/renderers/md.py:12`), `chunks`
 (`src/pdf_router/renderers/chunks.py:481` — hybrid RAG envelope v2,
 [ADR-0006](adr/0006-rag-chunks.md)), `json`
-(`src/pdf_router/renderers/json_renderer.py:11`). Renderers may not import
+(`src/pdf_router/renderers/json_renderer.py:11`) and `docling`
+(`src/pdf_router/renderers/docling.py` — the DoclingDocument interchange
+format, [ADR-0009](adr/0009-docling-renderer.md)). Renderers may not import
 adapters (`tests/test_conventions.py:37` enforces this).
 
 ## Router
@@ -201,9 +220,10 @@ over a thread pool, and returns a complete IR plus a `ProcessingReport`.
 
 The embedding surface: everything re-exported by `pdf_router/__init__.py`
 from `src/pdf_router/api.py` — `convert` (one call → Markdown),
-`process_pdf` (IR + report), `render_markdown`/`render_chunks`/`render_json`,
-`write_outputs`, `load_config`, plus the IR/config types and the typed
-errors (`ConfigError`, `ProcessingError`, `UnsupportedFormatError`).
+`process_pdf` (IR + report), `render_markdown`/`render_chunks`/`render_json`
+/`render_docling`, `write_outputs`, `load_config`, plus the IR/config types
+and the typed errors (`ConfigError`, `ProcessingError`,
+`UnsupportedFormatError`, `DoclingUnavailableError`).
 Submodules are implementation details; `tests/test_api.py` pins the
 contract (including the no-heavy-imports-at-startup rule).
 

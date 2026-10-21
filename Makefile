@@ -4,7 +4,7 @@
 UV := uv run
 
 .DEFAULT_GOAL := check
-.PHONY: setup sync lint types test test-full check fix
+.PHONY: setup sync lint types test test-docling test-full check fix
 
 ## First-time machine setup: djvulibre, dev extras, .runtime binaries.
 ## pdfium/onnxruntime are linux-x64 builds pinned to the same versions as
@@ -43,6 +43,13 @@ test:
 ## Whole suite incl. slow OCR anchors (~20 s/page; corpus tests skip gracefully).
 test-full:
 	$(UV) pytest -q
+
+## The docling renderer's own tier (ADR-0009): the optional extra must be
+## installed, otherwise the whole module skips and the schema gate
+## (DoclingDocument.model_validate) never runs.
+test-docling:
+	uv sync --extra dev --extra docling --locked
+	$(UV) pytest tests/test_docling_renderer.py -q
 
 ## Pre-push gate: lint + types + fast tests = the ci.yml sequence.
 check: lint types test

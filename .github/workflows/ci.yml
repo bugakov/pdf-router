@@ -46,3 +46,13 @@ jobs:
 
       - name: Fast tests
         run: uv run pytest -m "not slow" -q
+
+      # The docling renderer is an optional extra (ADR-0009). Its tests
+      # skip when docling-core is absent, so the extra is installed here
+      # explicitly — otherwise the docling schema gate
+      # (DoclingDocument.model_validate) would never run in CI.
+      - name: Install the docling extra
+        run: uv sync --extra dev --extra docling --locked
+
+      - name: Docling renderer tests
+        run: uv run pytest tests/test_docling_renderer.py -q

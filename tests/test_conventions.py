@@ -40,16 +40,26 @@ def _imported_modules(path: Path) -> set[str]:
     return mods
 
 
+#: Modules a renderer may import: stdlib plus the IR/config surface.
+#: ``docling_core`` is allowed *only* in the docling renderer — the optional
+#: extra (ADR-0009), imported lazily inside the renderer so that
+#: ``import pdf_router`` stays cheap. Every other renderer keeps the strict set.
+RENDERER_IMPORTS = {
+    "json", "re", "pathlib", "dataclasses", "typing", "__future__",
+    "pdf_router",
+}
+
+
 def test_no_renderer_imports_adapter() -> None:
     renderers_dir = SRC / "renderers"
     for py in renderers_dir.glob("*.py"):
         mods = _imported_modules(py)
         assert "adapters" not in mods, f"{py.name} imports adapters"
         # stdlib/third-party/ir/config only
-        assert mods <= {
-            "json", "re", "pathlib", "dataclasses", "typing", "__future__",
-            "pdf_router",
-        }, f"{py.name} has unexpected imports: {mods - {'json', 're', 'pathlib', 'dataclasses', 'typing', '__future__', 'pdf_router'}}"
+        allowed = set(RENDERER_IMPORTS)
+        if py.name == "docling.py":
+            allowed.add("docling_core")
+        assert mods <= allowed, f"{py.name} has unexpected imports: {mods - allowed}"
 
 
 def test_no_adapter_imports_renderer() -> None:

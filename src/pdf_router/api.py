@@ -394,7 +394,10 @@ def iter_zvec_records(
 
     cfg = _coerce_renderer_config(config)
     if isinstance(target, (str, Path)):
-        full_cfg = _coerce_config(config)
+        if isinstance(config, RendererConfig):
+            full_cfg = RouterConfig(renderers=config)
+        else:
+            full_cfg = _coerce_config(config)
         ir, _ = process_pdf(target, config=full_cfg)
     else:
         ir = target

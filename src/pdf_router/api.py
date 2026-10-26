@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +56,7 @@ from pdf_router.config import (
     ConfigError,
     RendererConfig,
     RouterConfig,
+    ZvecConfig,
 )
 from pdf_router.core import (
     PipelineCancelled,
@@ -88,6 +89,7 @@ __all__ = [
     "ProgressEvent",
     "UnsupportedFormatError",
     "convert",
+    "iter_zvec_records",
     "load_config",
     "params_fingerprint",
     "process_pdf",
@@ -95,6 +97,7 @@ __all__ = [
     "render_docling",
     "render_json",
     "render_markdown",
+    "render_zvec",
     "wire_pdf_inspector_env",
     "write_outputs",
     # Re-exported types, so a caller never imports a submodule.
@@ -105,6 +108,7 @@ __all__ = [
     "RendererConfig",
     "RouterConfig",
     "SrcTool",
+    "ZvecConfig",
     "from_dict",
     "to_dict",
 ]
@@ -368,6 +372,35 @@ def render_docling(ir: IR, *, config: RendererConfig | RouterConfig | None = Non
     return docling.render(ir, config=_coerce_renderer_config(config))
 
 
+def render_zvec(ir: IR, *, config: RendererConfig | RouterConfig | None = None) -> str:
+    """Render an IR to JSONL for zvec vector store ingestion (ADR-0010)."""
+    from pdf_router.renderers import zvec
+
+    return zvec.render(ir, config=_coerce_renderer_config(config))
+
+
+def iter_zvec_records(
+    target: IR | str | Path,
+    *,
+    config: RendererConfig | RouterConfig | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Iterate strongly-typed chunk dictionaries from an IR or document path.
+
+    Accepts either an already materialized :class:`IR` or a file path
+    (``str`` or ``Path``). When given a file path, the pipeline runs
+    via :func:`process_pdf` first.
+    """
+    from pdf_router.renderers import zvec
+
+    cfg = _coerce_renderer_config(config)
+    if isinstance(target, (str, Path)):
+        full_cfg = _coerce_config(config)
+        ir, _ = process_pdf(target, config=full_cfg)
+    else:
+        ir = target
+    return zvec.iter_records(ir, config=cfg)
+
+
 #: Renderer name -> function producing its text. Order is irrelevant; the
 #: ``enabled`` set in the config decides what is written.
 _RENDERERS = {
@@ -375,6 +408,7 @@ _RENDERERS = {
     "chunks": (render_chunks, ".chunks.jsonl"),
     "json": (render_json, ".ir.json"),
     "docling": (render_docling, ".docling.json"),
+    "zvec": (render_zvec, ".zvec.jsonl"),
 }
 
 

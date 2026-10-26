@@ -32,6 +32,7 @@ from pdf_router.api import (
     UnsupportedFormatError,
     convert,
     from_dict,
+    iter_zvec_records,
     load_config,
     params_fingerprint,
     process_pdf,
@@ -39,9 +40,11 @@ from pdf_router.api import (
     render_docling,
     render_json,
     render_markdown,
+    render_zvec,
     to_dict,
     wire_pdf_inspector_env,
     write_outputs,
+    ZvecConfig,
 )
 
 __version__ = "0.6.2"
@@ -50,12 +53,14 @@ __all__ = [
     "__version__",
     # Entry points
     "convert",
+    "iter_zvec_records",
     "load_config",
     "process_pdf",
     "render_chunks",
     "render_docling",
     "render_json",
     "render_markdown",
+    "render_zvec",
     "wire_pdf_inspector_env",
     "write_outputs",
     # Errors
@@ -75,6 +80,7 @@ __all__ = [
     "RendererConfig",
     "RouterConfig",
     "SrcTool",
+    "ZvecConfig",
     "from_dict",
     "params_fingerprint",
     "to_dict",

@@ -39,8 +39,9 @@ _KNOWN_TOP_LEVEL = {"router", "ocr", "renderers", "routing", "structure"}
 _KNOWN_ROUTER_KEYS = {"log_level"}
 #: Accepted values for ``[router].log_level`` (case-insensitive).
 _VALID_LOG_LEVELS = ("debug", "info", "warning", "error")
-_KNOWN_RENDERERS_KEYS = {"output_dir", "page_markers", "chunks", "json"}
+_KNOWN_RENDERERS_KEYS = {"output_dir", "page_markers", "chunks", "json", "zvec"}
 _KNOWN_CHUNKS_KEYS = {"max_tokens", "overlap_tokens", "summary", "embed_context"}
+_KNOWN_ZVEC_KEYS = {"max_tokens", "overlap_tokens", "summary", "embed_context", "project_uid", "doc_uid"}
 _KNOWN_JSON_KEYS = {"include_page_bbox"}
 _KNOWN_ROUTING_KEYS = {
     "language",
@@ -96,6 +97,26 @@ class ChunksConfig:
 
 
 @dataclass
+class ZvecConfig:
+    """``[renderers.zvec]`` — the zvec target renderer (ADR-0010).
+
+    ``max_tokens``/``overlap_tokens`` budget the embed/markdown text of
+    one chunk (heuristic token = 4 chars). ``summary`` picks the table
+    summary engine: ``"facts"`` (default, deterministic stats from the
+    grid) or ``"none"``. ``embed_context`` toggles the context
+    preamble (document title + section headings) inside the ``embed_text``.
+    ``project_uid`` and ``doc_uid`` populate the scalar isolation keys.
+    """
+
+    max_tokens: int = 512
+    overlap_tokens: int = 64
+    summary: str = "facts"
+    embed_context: bool = True
+    project_uid: str = ""
+    doc_uid: str = ""
+
+
+@dataclass
 class RendererConfig:
     """Everything the renderers need (DESIGN §7). Shared by all three.
 
@@ -110,6 +131,7 @@ class RendererConfig:
     output_dir: Path | None = None
     page_markers: bool = False
     chunks: ChunksConfig = field(default_factory=ChunksConfig)
+    zvec: ZvecConfig = field(default_factory=ZvecConfig)
     json_include_page_bbox: bool = False
 
 
@@ -333,6 +355,28 @@ def _parse_renderers(sec: Any) -> RendererConfig:
     _warn_unknown(json_sec, _KNOWN_JSON_KEYS, "[renderers.json]")
     if "include_page_bbox" in json_sec:
         cfg.json_include_page_bbox = bool(json_sec["include_page_bbox"])
+
+    zvec_sec = sec.get("zvec", {})
+    if not isinstance(zvec_sec, dict):
+        raise ConfigError("[renderers.zvec] must be a table")
+    _warn_unknown(zvec_sec, _KNOWN_ZVEC_KEYS, "[renderers.zvec]")
+    if "max_tokens" in zvec_sec:
+        cfg.zvec.max_tokens = int(zvec_sec["max_tokens"])
+    if "overlap_tokens" in zvec_sec:
+        cfg.zvec.overlap_tokens = int(zvec_sec["overlap_tokens"])
+    if "summary" in zvec_sec:
+        cfg.zvec.summary = str(zvec_sec["summary"])
+    if cfg.zvec.summary not in _VALID_CHUNKS_SUMMARY:
+        raise ConfigError(
+            f'[renderers.zvec] unknown summary "{cfg.zvec.summary}" '
+            f"(valid: {', '.join(_VALID_CHUNKS_SUMMARY)})"
+        )
+    if "embed_context" in zvec_sec:
+        cfg.zvec.embed_context = bool(zvec_sec["embed_context"])
+    if "project_uid" in zvec_sec:
+        cfg.zvec.project_uid = str(zvec_sec["project_uid"])
+    if "doc_uid" in zvec_sec:
+        cfg.zvec.doc_uid = str(zvec_sec["doc_uid"])
 
     return cfg
 

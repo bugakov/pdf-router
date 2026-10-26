@@ -19,7 +19,7 @@ from pdf_router import (
     render_zvec,
     write_outputs,
 )
-from pdf_router.ir import BBox, HeadingBlock, TableBlock
+from pdf_router.ir import BBox, FigureBlock, HeadingBlock, TableBlock
 
 
 def _make_sample_ir() -> IR:
@@ -151,3 +151,92 @@ def test_write_outputs_zvec(tmp_path: Path) -> None:
     assert out_file.exists()
     content = out_file.read_text(encoding="utf-8")
     assert len(content.splitlines()) >= 3
+
+
+def test_zvec_figures_and_images() -> None:
+    # Page 1: Heading + Drawing FigureBlock (with keyword "схема")
+    fig_drawing = FigureBlock(
+        bbox=BBox(x0=10.0, y0=20.0, x1=200.0, y1=300.0),
+        caption="Схема насосной станции М1:100",
+        image_index=0,
+    )
+    p1 = PageResult(
+        page=0,
+        markdown="## Раздел 4. Чертежи\n\nНиже представлена схема.",
+        blocks=[
+            HeadingBlock(level=2, text="Раздел 4. Чертежи"),
+            fig_drawing,
+        ],
+        images=["/tmp/renders/page1_fig0.png"],
+        src_tool=SrcTool.PDF_INSPECTOR,
+    )
+
+    # Page 2: Regular illustration FigureBlock (no drawing keyword)
+    fig_image = FigureBlock(
+        bbox=BBox(x0=10.0, y0=20.0, x1=100.0, y1=150.0),
+        caption="Внешний вид здания",
+        image_index=0,
+    )
+    p2 = PageResult(
+        page=1,
+        markdown="### Фото здания",
+        blocks=[
+            HeadingBlock(level=3, text="Фото здания"),
+            fig_image,
+        ],
+        images=["/tmp/renders/page2_img0.png"],
+        src_tool=SrcTool.PDF_INSPECTOR,
+    )
+
+    # Page 3: No FigureBlock, but page.images sidecars present
+    p3 = PageResult(
+        page=2,
+        markdown="### Приложение с векторной графикой",
+        blocks=[
+            HeadingBlock(level=3, text="Приложение с векторной графикой"),
+        ],
+        images=["/tmp/renders/page3_vector_schema.png"],
+        src_tool=SrcTool.PDF_INSPECTOR,
+    )
+
+    ir = IR(
+        metadata=Metadata(page_count=3, title="Проект КНС"),
+        pages=[p1, p2, p3],
+    )
+
+    records = list(iter_zvec_records(ir, config=ZvecConfig(doc_uid="kns_doc")))
+
+    drawings = [r for r in records if r["fields"]["chunk_type"] == "drawing"]
+    images = [r for r in records if r["fields"]["chunk_type"] == "image"]
+
+    # 1 from FigureBlock on page 1, 1 from page.images with "vector" on page 3
+    assert len(drawings) == 2
+    assert len(images) == 1
+
+    # Drawing 1 (FigureBlock with "схема")
+    d1 = drawings[0]
+    assert d1["id"] == "kns_doc_p01_draw01"
+    assert d1["fields"]["chunk_type"] == "drawing"
+    assert d1["fields"]["caption"] == "Схема насосной станции М1:100"
+    assert d1["fields"]["image_url"] == "/tmp/renders/page1_fig0.png"
+    assert "[10.0, 20.0, 200.0, 300.0]" == d1["fields"]["bbox"]
+    assert "Чертёж / Схема" in d1["embed_text"]
+    assert "Схема насосной станции М1:100" in d1["embed_text"]
+    meta1 = json.loads(d1["fields"]["image_meta"])
+    assert meta1["kind"] == "drawing"
+    assert meta1["has_bbox"] is True
+
+    # Image (FigureBlock)
+    im = images[0]
+    assert im["id"] == "kns_doc_p02_img01"
+    assert im["fields"]["chunk_type"] == "image"
+    assert im["fields"]["caption"] == "Внешний вид здания"
+    assert im["fields"]["image_url"] == "/tmp/renders/page2_img0.png"
+    assert "Иллюстрация" in im["embed_text"]
+
+    # Drawing 2 (page.images fallback with vector keyword)
+    d2 = drawings[1]
+    assert d2["id"] == "kns_doc_p03_draw01"
+    assert d2["fields"]["chunk_type"] == "drawing"
+    assert d2["fields"]["image_url"] == "/tmp/renders/page3_vector_schema.png"
+

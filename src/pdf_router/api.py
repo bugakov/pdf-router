@@ -144,6 +144,10 @@ def _coerce_config(config: str | Path | RouterConfig | None) -> RouterConfig:
         return RouterConfig()
     if isinstance(config, RouterConfig):
         return config
+    if isinstance(config, RendererConfig):
+        return RouterConfig(renderers=config)
+    if isinstance(config, ZvecConfig):
+        return RouterConfig(renderers=RendererConfig(zvec=config))
     if isinstance(config, (str, Path)):
         path = Path(config)
         if not path.exists():
@@ -154,7 +158,9 @@ def _coerce_config(config: str | Path | RouterConfig | None) -> RouterConfig:
     )
 
 
-def _coerce_renderer_config(config: RendererConfig | RouterConfig | None) -> RendererConfig:
+def _coerce_renderer_config(
+    config: RendererConfig | RouterConfig | ZvecConfig | None,
+) -> RendererConfig:
     """Renderers take a ``RendererConfig``; callers often hold a ``RouterConfig``."""
     if config is None:
         return RendererConfig()
@@ -162,8 +168,10 @@ def _coerce_renderer_config(config: RendererConfig | RouterConfig | None) -> Ren
         return config.renderers
     if isinstance(config, RendererConfig):
         return config
+    if isinstance(config, ZvecConfig):
+        return RendererConfig(zvec=config)
     raise ConfigError(
-        f"renderer config must be RendererConfig or RouterConfig; got {type(config).__name__}"
+        f"renderer config must be RendererConfig, RouterConfig, or ZvecConfig; got {type(config).__name__}"
     )
 
 

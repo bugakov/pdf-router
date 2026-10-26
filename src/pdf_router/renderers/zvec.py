@@ -5,6 +5,7 @@ Produces records matching the zvec collection schema:
 - Preserves geometry (`page_num` 1-indexed, `bbox` as JSON string `[x0, y0, x1, y1]`).
 - Hierarchical context (`section_path` breadcrumbs, `section_title`).
 - Structured table facts (`table_facts` as JSON string).
+- Blueprints and visual illustrations (`chunk_type="drawing"` | `"image"`, `image_url`, `caption`, `image_meta`).
 - Deterministic IDs: `{doc_uid}_p{page_num:02d}_{chunk_type}{seq:02d}`.
 """
 
@@ -15,7 +16,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from pdf_router.config import RendererConfig
-from pdf_router.ir import IR, HeadingBlock, PageResult, TableBlock
+from pdf_router.ir import FigureBlock, HeadingBlock, IR, PageResult, TableBlock
 from pdf_router.renderers.chunks import (
     _HEADING_RE,
     _MIN_TEXT_CHARS,
@@ -32,6 +33,11 @@ from pdf_router.renderers.chunks import (
     _split_long,
     _strip_tables,
     _tokens,
+)
+
+_DRAWING_KEYWORDS = (
+    "чертеж", "чертёж", "схема", "план", "разрез", "узел",
+    "фасад", "генплан", "профиль", "аксонометрия", "трасса",
 )
 
 
@@ -105,7 +111,10 @@ def iter_records(ir: IR, *, config: RendererConfig) -> Iterator[dict[str, Any]]:
         fallback_section = md_headings[0][1].strip() if md_headings else None
 
         table_jobs: list[tuple[TableBlock, str | None, str, str | None, int]] = []
+        figure_jobs: list[tuple[FigureBlock, str | None, str, str | None, int]] = []
         table_no = 0
+        fig_no = 0
+
         for block in ordered:
             if isinstance(block, HeadingBlock):
                 stack.push(block.level, block.text)
@@ -120,6 +129,17 @@ def iter_records(ir: IR, *, config: RendererConfig) -> Iterator[dict[str, Any]]:
                     snap_title or fallback_section,
                     table_no,
                 ))
+            elif isinstance(block, FigureBlock):
+                fig_no += 1
+                snap_title = stack.deepest()
+                snap_path = stack.path()
+                figure_jobs.append((
+                    block,
+                    snap_title,
+                    snap_path or fallback_section or "",
+                    snap_title or fallback_section,
+                    fig_no,
+                ))
 
         # --- Process Table Blocks ---
         for block, heading, section_path, section_title, no in table_jobs:
@@ -128,7 +148,6 @@ def iter_records(ir: IR, *, config: RendererConfig) -> Iterator[dict[str, Any]]:
             if not rows or not n_cols:
                 continue
 
-            # Caption demotion + key header band
             caption: str | None = None
             if len(rows) >= 2 and _looks_like_caption_row(rows[0]):
                 caption = " ".join(c.strip() for c in rows[0] if c.strip())
@@ -139,7 +158,6 @@ def iter_records(ir: IR, *, config: RendererConfig) -> Iterator[dict[str, Any]]:
                 data = rows[len(band):]
             keys = _column_keys(band, n_cols)
 
-            # Context breadcrumbs
             crumbs = " › ".join(p for p in (doc_name, section_path or section_title) if p)
             head: list[str] = []
             if embed_context and crumbs:
@@ -169,7 +187,6 @@ def iter_records(ir: IR, *, config: RendererConfig) -> Iterator[dict[str, Any]]:
                     out.append(_facts_summary(keys, part_rows, n_cols))
                 return "\n".join(ln for ln in out if ln)
 
-            # Split policy
             whole_embed = embed_of(data)
             groups: list[list[list[str]]]
             if not data or _tokens(whole_embed) <= max_tokens:
@@ -218,6 +235,139 @@ def iter_records(ir: IR, *, config: RendererConfig) -> Iterator[dict[str, Any]]:
                         "content": md_of(part_rows),
                         "table_facts": table_facts,
                         "file_path": file_path,
+                        "image_url": "",
+                        "caption": caption or "",
+                        "image_meta": "",
+                    },
+                    "metadata": {
+                        "source_format": source_format,
+                        "src_tool": (
+                            page.src_tool.value
+                            if hasattr(page.src_tool, "value")
+                            else str(page.src_tool)
+                        ),
+                        "error": page.error,
+                        "images": list(page.images),
+                    },
+                }
+                chunk_index += 1
+
+        # --- Process Figure / Drawing Blocks ---
+        for fig_block, snap_title, snap_path, snap_fallback_title, no in figure_jobs:
+            cap = fig_block.caption or snap_title or ""
+            is_draw = any(kw in cap.lower() for kw in _DRAWING_KEYWORDS) or (
+                fig_block.image_index is not None
+                and fig_block.image_index < len(page.images)
+                and "vector" in page.images[fig_block.image_index].lower()
+            )
+            fig_type = "drawing" if is_draw else "image"
+            prefix = "draw" if is_draw else "img"
+            fig_id = f"{doc_uid}_p{page_num:02d}_{prefix}{no:02d}"
+
+            img_path = ""
+            if fig_block.image_index is not None and fig_block.image_index < len(page.images):
+                img_path = page.images[fig_block.image_index]
+            elif page.images:
+                img_path = page.images[0]
+
+            crumbs = " › ".join(p for p in (doc_name, snap_path or snap_fallback_title) if p)
+            tag = "Чертёж / Схема" if is_draw else "Иллюстрация"
+            embed_lines: list[str] = []
+            if embed_context and crumbs:
+                embed_lines.append(crumbs)
+            if cap:
+                embed_lines.append(f"[{tag}]: {cap}")
+            else:
+                embed_lines.append(f"[{tag}] (Стр. {page_num})")
+
+            content_lines: list[str] = []
+            if img_path:
+                content_lines.append(f"![{cap or tag}]({img_path})")
+            if cap:
+                content_lines.append(f"**{cap}**")
+
+            img_meta = json.dumps({
+                "kind": fig_type,
+                "page": page_num,
+                "has_bbox": fig_block.bbox is not None,
+            }, ensure_ascii=False)
+
+            yield {
+                "id": fig_id,
+                "embed_text": "\n".join(embed_lines),
+                "fields": {
+                    "project_uid": project_uid,
+                    "doc_uid": doc_uid,
+                    "doc_name": doc_name,
+                    "chunk_type": fig_type,
+                    "chunk_index": chunk_index,
+                    "page_num": page_num,
+                    "bbox": _format_bbox(fig_block.bbox),
+                    "section_path": snap_path,
+                    "section_title": snap_fallback_title or "",
+                    "content": "\n\n".join(content_lines) or f"[{tag}]",
+                    "table_facts": "",
+                    "file_path": file_path,
+                    "image_url": img_path,
+                    "caption": cap,
+                    "image_meta": img_meta,
+                },
+                "metadata": {
+                    "source_format": source_format,
+                    "src_tool": (
+                        page.src_tool.value
+                        if hasattr(page.src_tool, "value")
+                        else str(page.src_tool)
+                    ),
+                    "error": page.error,
+                    "images": list(page.images),
+                },
+            }
+            chunk_index += 1
+
+        # If no FigureBlocks were found, but page.images has items (e.g. extracted sidecars):
+        if not figure_jobs and page.images:
+            for img_idx, img_p in enumerate(page.images, start=1):
+                is_draw = "vector" in img_p.lower()
+                fig_type = "drawing" if is_draw else "image"
+                tag = "Чертёж / Схема" if is_draw else "Иллюстрация"
+                cap = stack.deepest() or fallback_section or ""
+                crumbs = " › ".join(p for p in (doc_name, stack.path() or cap) if p)
+                embed_lines = []
+                if embed_context and crumbs:
+                    embed_lines.append(crumbs)
+                if cap:
+                    embed_lines.append(f"[{tag}]: {cap} (Стр. {page_num})")
+                else:
+                    embed_lines.append(f"[{tag}] (Стр. {page_num})")
+
+                prefix = "draw" if is_draw else "img"
+                fig_id = f"{doc_uid}_p{page_num:02d}_{prefix}{img_idx:02d}"
+                img_meta = json.dumps({
+                    "kind": fig_type,
+                    "page": page_num,
+                    "has_bbox": False,
+                }, ensure_ascii=False)
+
+                yield {
+                    "id": fig_id,
+                    "embed_text": "\n".join(embed_lines),
+                    "fields": {
+                        "project_uid": project_uid,
+                        "doc_uid": doc_uid,
+                        "doc_name": doc_name,
+                        "chunk_type": fig_type,
+                        "chunk_index": chunk_index,
+                        "page_num": page_num,
+                        "bbox": "[]",
+                        "section_path": stack.path() or fallback_section or "",
+                        "section_title": cap,
+                        "content": f"![{cap or tag}]({img_p})\n\n**{cap}**" if cap else f"![{tag}]({img_p})",
+                        "table_facts": "",
+                        "file_path": file_path,
+                        "image_url": img_p,
+                        "caption": cap,
+                        "image_meta": img_meta,
                     },
                     "metadata": {
                         "source_format": source_format,
@@ -273,6 +423,9 @@ def iter_records(ir: IR, *, config: RendererConfig) -> Iterator[dict[str, Any]]:
                         "content": piece,
                         "table_facts": "",
                         "file_path": file_path,
+                        "image_url": "",
+                        "caption": "",
+                        "image_meta": "",
                     },
                     "metadata": {
                         "source_format": source_format,

@@ -19,12 +19,13 @@ from pdf_router import __version__
 from pdf_router.config import ConfigError, RouterConfig
 from pdf_router.api import wire_pdf_inspector_env, write_outputs
 from pdf_router.formats import Format, UnsupportedFormatError, detect_format
+from pdf_router.ir import from_dict
 from pdf_router.renderers import docling as docling_renderer
 
 logger = logging.getLogger("pdf_router")
 
 DEFAULT_CONFIG_NAME = "router.toml"
-VALID_RENDERERS = ("md", "chunks", "json", "docling")
+VALID_RENDERERS = ("md", "chunks", "json", "docling", "zvec")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,9 +43,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", metavar="DIR", default=None, help="Output directory (default: out/)")
     parser.add_argument(
         "--render",
-        metavar="md,chunks,json,docling",
+        metavar="md,chunks,json,docling,zvec",
         default=None,
-        help="Comma-separated subset of renderers (default: md,chunks,json)",
+        help="Comma-separated subset of renderers (default: md,chunks,json,zvec)",
     )
     parser.add_argument("--info", action="store_true", help="Print metadata JSON only, no render")
     parser.add_argument(
@@ -199,6 +200,27 @@ def main(argv: list[str] | None = None) -> int:
         if args.out is not None
         else (cfg.renderers.output_dir or Path("out"))
     )
+
+    # Fast-path for pre-computed IR files (.ir.json or .json):
+    # Skip OCR and heavy pipeline, directly render outputs (e.g. zvec JSONL).
+    if input_path.suffix.lower() == ".json":
+        try:
+            raw_ir = json.loads(input_path.read_text(encoding="utf-8"))
+            ir = from_dict(raw_ir)
+            stem = input_path.name
+            for sfx in (".ir.json", ".json"):
+                if stem.endswith(sfx):
+                    stem = stem[:-len(sfx)]
+                    break
+            write_outputs(ir, out_dir, stem, config=cfg.renderers)
+            return 0
+        except docling_renderer.DoclingUnavailableError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        except Exception as exc:
+            logger.error("rendering from IR JSON failed: %s", exc)
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
 
     from pdf_router.core import process_pdf
 

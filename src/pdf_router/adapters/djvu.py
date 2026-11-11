@@ -174,15 +174,23 @@ def djvu_page_texts(path: str, page_count: int) -> list[str]:
     done — 1 spawn for the 30/33 layerless corpus files. Otherwise fall
     back to per-page extraction for exact page attribution.
     """
-    whole = _clean_layer_text(_djvused(path, "print-pure-txt"))
+    try:
+        whole = _clean_layer_text(_djvused(path, "print-pure-txt"))
+    except DjvuError as exc:
+        logger.warning("whole-doc print-pure-txt failed (%s), treating as layerless: %s", exc, path)
+        return [""] * page_count
+
     if not whole:
         return [""] * page_count
     if page_count == 1:
         return [whole]
-    return [
-        _clean_layer_text(_djvused(path, f"select {i + 1}; print-pure-txt"))
-        for i in range(page_count)
-    ]
+    texts = []
+    for i in range(page_count):
+        try:
+            texts.append(_clean_layer_text(_djvused(path, f"select {i + 1}; print-pure-txt")))
+        except DjvuError:
+            texts.append("")
+    return texts
 
 
 # ---------------------------------------------------------------------------

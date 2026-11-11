@@ -219,6 +219,7 @@ def _rapidocr_build_engine(config: RouterConfig) -> dict[str, Any]:
         "Rec.ocr_version": OCRVersion.PPOCRV5,
         "Rec.model_type": getattr(ModelType, rec_model_type.upper()),
         "Rec.lang_type": _rapidocr_language(config),
+        "Rec.rec_batch_num": int(params.get("rec_batch_num", 32 if params.get("use_cuda") else 16)),
     }
     if params.get("use_cuda"):
         res["EngineConfig.onnxruntime.use_cuda"] = True

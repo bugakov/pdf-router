@@ -212,3 +212,35 @@ def test_new_keys_exist_and_default_off():
     cfg = RouterConfig()
     assert cfg.routing.images_full_page_min_ink == 0.0
     assert cfg.routing.images_vector_min_share == pytest.approx(0.001)
+
+
+def test_process_pdf_passes_vector_min_share_and_min_ink(tmp_path, monkeypatch):
+    """process_pdf properly passes images_vector_min_share and images_full_page_min_ink."""
+    from pdf_router.api import process_pdf
+    import pdf_router.core as core_mod
+
+    recorded = {}
+    def mock_extract(*args, **kwargs):
+        recorded.update(kwargs)
+        return [], 0
+
+    monkeypatch.setattr(core_mod, "extract_page_images", mock_extract)
+
+    import fitz
+    path = tmp_path / "dummy.pdf"
+    doc = fitz.open()
+    doc.new_page(width=100, height=100)
+    doc.save(str(path))
+    doc.close()
+
+    cfg = RouterConfig()
+    cfg.routing.images_full_page_min_ink = 0.85
+    cfg.routing.images_vector_min_share = 0.05
+    out = tmp_path / "out"
+    out.mkdir()
+
+    process_pdf(str(path), config=cfg, output_dir=out)
+
+    assert recorded.get("full_page_min_ink") == 0.85
+    assert recorded.get("vector_min_share") == 0.05
+

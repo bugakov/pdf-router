@@ -311,6 +311,8 @@ def process_pdf(
                         vector=routing_cfg.extract_vector_diagrams,
                         min_size=routing_cfg.images_min_size,
                         min_thin=routing_cfg.images_min_thin,
+                        full_page_min_ink=routing_cfg.images_full_page_min_ink,
+                        vector_min_share=routing_cfg.images_vector_min_share,
                     )
                 elif source_format == "docx":
                     from pdf_router.adapters.docx import extract_docx_images

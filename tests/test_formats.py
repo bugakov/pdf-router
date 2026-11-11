@@ -289,3 +289,19 @@ def test_golden_fixtures_committed() -> None:
         p = fixtures / rel
         assert p.exists(), f"golden fixture missing: {p} (suite is not self-sufficient)"
         assert p.stat().st_size > 500, f"golden fixture looks truncated: {p}"
+
+
+def test_pdf_inspector_failure_falls_back_to_pymupdf(p5_pdf: Path, monkeypatch) -> None:
+    """Broken xref/streams in pdf_inspector fall back to pymupdf instead of aborting."""
+    import pdf_inspector
+    from pdf_router.adapters.pdf_inspector import extract_ir
+
+    def broken_extract(*args, **kwargs):
+        raise ValueError("PDF parsing error: couldn't parse input")
+
+    monkeypatch.setattr(pdf_inspector, "extract_pages_markdown", broken_extract)
+
+    ir = extract_ir(str(p5_pdf))
+    assert ir.metadata.page_count == 1
+    assert len(ir.pages) == 1
+    assert ir.pages[0].page == 0

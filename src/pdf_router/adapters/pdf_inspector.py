@@ -203,6 +203,69 @@ def _headings_from_structure_tree(
 # ---------------------------------------------------------------------------
 
 
+def _extract_ir_pymupdf_fallback(
+    path: str,
+    result: Any = None,
+    exc: Exception | None = None,
+) -> IR:
+    """Fallback when pdf_inspector Rust calls fail (corrupt xref, invalid structure).
+
+    Opens the PDF via PyMuPDF (pymupdf), which is very forgiving with broken streams.
+    Marks pages as needing OCR if they have little or no digital text.
+    """
+    import pymupdf
+
+    doc = pymupdf.open(path)
+    try:
+        page_count = len(doc)
+        pages_needing_ocr: list[int] = (
+            list(result.pages_needing_ocr)
+            if result and hasattr(result, "pages_needing_ocr") and result.pages_needing_ocr
+            else []
+        )
+        pdf_type = getattr(result, "pdf_type", None) or "scanned"
+
+        reasons_by_page: dict[int, Any] = {}
+        if result and getattr(result, "ocr_reasons_by_page", None):
+            reasons_by_page = {int(e.page): e for e in result.ocr_reasons_by_page}
+
+        pages: list[PageResult] = []
+        for i, pm_page in enumerate(doc):
+            one_indexed = i + 1
+            txt = pm_page.get_text() or ""
+            is_scan = (len(txt.strip()) < 50) or (one_indexed in pages_needing_ocr)
+            if is_scan and one_indexed not in pages_needing_ocr:
+                pages_needing_ocr.append(one_indexed)
+
+            reason_entry = reasons_by_page.get(one_indexed)
+            ocr_reason = (
+                ", ".join(reason_entry.reasons)
+                if reason_entry and reason_entry.reasons
+                else ("scanned_page" if is_scan else None)
+            )
+
+            pages.append(
+                PageResult(
+                    page=i,
+                    markdown=txt if not is_scan else "",
+                    needs_ocr=is_scan,
+                    ocr_reason=ocr_reason,
+                    src_tool=SrcTool.PDF_INSPECTOR,
+                    blocks=[],
+                )
+            )
+
+        metadata = Metadata(
+            pdf_type=pdf_type if pdf_type != "none" else ("scanned" if len(pages_needing_ocr) == page_count else "image_based"),
+            page_count=page_count,
+            title=getattr(result, "title", None) or doc.metadata.get("title") or None,
+            pages_needing_ocr=pages_needing_ocr,
+        )
+        return IR(metadata=metadata, pages=pages)
+    finally:
+        doc.close()
+
+
 def extract_ir(path: str | Path) -> IR:
     """Extract full IR from a PDF via pdf-inspector.
 
@@ -222,8 +285,17 @@ def extract_ir(path: str | Path) -> IR:
     import pdf_inspector
 
     path = os.fspath(path)
-    result = pdf_inspector.process_pdf(path)
-    pages_result = pdf_inspector.extract_pages_markdown(path)
+    try:
+        result = pdf_inspector.process_pdf(path)
+    except Exception as exc:
+        logger.warning("pdf_inspector.process_pdf failed (%s), falling back to PyMuPDF: %s", exc, path)
+        return _extract_ir_pymupdf_fallback(path, result=None, exc=exc)
+
+    try:
+        pages_result = pdf_inspector.extract_pages_markdown(path)
+    except Exception as exc:
+        logger.warning("pdf_inspector.extract_pages_markdown failed (%s), falling back to PyMuPDF: %s", exc, path)
+        return _extract_ir_pymupdf_fallback(path, result=result, exc=exc)
 
     metadata = Metadata(
         pdf_type=result.pdf_type,

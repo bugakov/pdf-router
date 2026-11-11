@@ -12,6 +12,7 @@ dependencies = [
     "onnxruntime>=1.29.0",
     "pdf-inspector>=1.17",
     "pymupdf>=1.27",
+    "rapid-layout>=1.2.1",
     "rapidocr[onnxruntime]>=3.9.2",
     "wired-table-rec==1.2.0",
 ]

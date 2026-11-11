@@ -208,10 +208,13 @@ def test_vector_threshold_is_share_of_page(tmp_path):
 
 # ── Конфигурация ────────────────────────────────────────────────────────
 
-def test_new_keys_exist_and_default_off():
+def test_new_keys_exist_and_default_calibrated():
     cfg = RouterConfig()
-    assert cfg.routing.images_full_page_min_ink == 0.0
-    assert cfg.routing.images_vector_min_share == pytest.approx(0.001)
+    assert cfg.routing.images_full_page_min_ink == pytest.approx(0.15)
+    assert cfg.routing.images_vector_min_share == pytest.approx(0.05)
+    assert cfg.routing.images_min_size == 150
+    assert cfg.routing.images_min_thin == 8
+    assert cfg.routing.extract_layout_figures is True
 
 
 def test_process_pdf_passes_vector_min_share_and_min_ink(tmp_path, monkeypatch):

@@ -146,24 +146,23 @@ class RoutingConfig:
     extract_vector_diagrams: bool = False
     #: Extract figures/illustrations from page rasters using PP-Structure Layout (rapid_layout).
     #: Especially enables figure extraction on scanned PDF pages and DJVU files.
-    extract_layout_figures: bool = False
+    extract_layout_figures: bool = True
     layout_conf_thresh: float = 0.5
     # Size gate for raster sidecars: drop proven junk, keep doubtful content.
     # images_min_size — both sides below this (icons, thumbnails); 0 = off.
     # images_min_thin — thin side below this (separator rules); 0 = off.
-    # Calibrated on the S3 corpus 2026-10-01; the library default keeps
-    # everything (opt-in per consumer).
+    # Calibrated on the S3 corpus 2026-10-01 (150 px min_size, 8 px min_thin).
     #: Доля содержимого, при которой полностраничный растр (>= 80% страницы)
     #: сохраняется, а не отбрасывается как «фон страницы». 0 = прежнее
     #: поведение: отбрасывать всегда. Фотография на всю страницу от скана по
     #: площади неотличима, поэтому при включении страница измеряется по
     #: отклонению от собственного фона.
-    images_full_page_min_ink: float = 0.0
+    images_full_page_min_ink: float = 0.15
     #: Минимальная доля площади страницы для векторного контура. Прежний
-    #: абсолютный порог 500 pt² пропускал засечки осей гистограмм.
-    images_vector_min_share: float = 0.001
-    images_min_size: int = 0
-    images_min_thin: int = 0
+    #: абсолютный порог 500 pt² пропускал засечки осей гистограмм (0.05 = 5%).
+    images_vector_min_share: float = 0.05
+    images_min_size: int = 150
+    images_min_thin: int = 8
     # Default rapidocr: PP-OCRv6 small det + PP-OCRv5 mobile rec is the
     # only combination that actually recognizes Cyrillic (validated in
     # TKT-OC-02; pdf_inspector_ocr's dictionary has zero Cyrillic tokens).

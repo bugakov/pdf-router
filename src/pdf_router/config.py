@@ -49,6 +49,8 @@ _KNOWN_ROUTING_KEYS = {
     "workers",
     "extract_raster_photos",
     "extract_vector_diagrams",
+    "extract_layout_figures",
+    "layout_conf_thresh",
     "images_full_page_min_ink",
     "images_vector_min_share",
     "images_min_size",
@@ -142,6 +144,10 @@ class RoutingConfig:
     workers: int = 2
     extract_raster_photos: bool = True
     extract_vector_diagrams: bool = False
+    #: Extract figures/illustrations from page rasters using PP-Structure Layout (rapid_layout).
+    #: Especially enables figure extraction on scanned PDF pages and DJVU files.
+    extract_layout_figures: bool = False
+    layout_conf_thresh: float = 0.5
     # Size gate for raster sidecars: drop proven junk, keep doubtful content.
     # images_min_size — both sides below this (icons, thumbnails); 0 = off.
     # images_min_thin — thin side below this (separator rules); 0 = off.
@@ -397,6 +403,10 @@ def _parse_routing(sec: Any) -> RoutingConfig:
         cfg.extract_raster_photos = bool(sec["extract_raster_photos"])
     if "extract_vector_diagrams" in sec:
         cfg.extract_vector_diagrams = bool(sec["extract_vector_diagrams"])
+    if "extract_layout_figures" in sec:
+        cfg.extract_layout_figures = bool(sec["extract_layout_figures"])
+    if "layout_conf_thresh" in sec:
+        cfg.layout_conf_thresh = float(sec["layout_conf_thresh"])
     if "images_full_page_min_ink" in sec:
         cfg.images_full_page_min_ink = float(sec["images_full_page_min_ink"])
     if "images_vector_min_share" in sec:

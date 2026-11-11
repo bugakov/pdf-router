@@ -244,3 +244,36 @@ def test_process_pdf_passes_vector_min_share_and_min_ink(tmp_path, monkeypatch):
     assert recorded.get("full_page_min_ink") == 0.85
     assert recorded.get("vector_min_share") == 0.05
 
+
+def test_extract_layout_figures_crops_and_filters(monkeypatch, tmp_path: Path) -> None:
+    """extract_layout_figures extracts figures passing conf, size, and area checks."""
+    import numpy as np
+    from unittest.mock import MagicMock
+    from pdf_router.extract_images import extract_layout_figures
+
+    dummy_raster = np.zeros((1000, 800, 3), dtype=np.uint8)
+
+    class DummyRes:
+        boxes = [
+            [50, 50, 400, 400],    # valid figure: 350x350
+            [10, 10, 50, 50],      # too small: 40x40 < 100
+            [0, 0, 790, 990],      # full page: > 85% area
+            [100, 100, 500, 500],  # low confidence
+            [100, 500, 500, 900],  # table, not figure
+        ]
+        class_names = ["figure", "figure", "figure", "figure", "table"]
+        scores = [0.85, 0.90, 0.95, 0.30, 0.90]
+
+    mock_engine = MagicMock(return_value=DummyRes())
+    monkeypatch.setattr("pdf_router.extract_images._get_layout_engine", lambda: mock_engine)
+
+    saved, dropped = extract_layout_figures(
+        dummy_raster, page_num=0, output_dir=tmp_path, did="testid123456",
+        conf_thresh=0.5, min_size=100
+    )
+
+    assert len(saved) == 1
+    assert saved[0] == "testid123456/images/page0001_figure_00.png"
+    assert (tmp_path / saved[0]).exists()
+
+

@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pdf_router.ir import PageResult
 
@@ -94,6 +95,108 @@ def page_images_dir(output_dir: Path, doc_id: str) -> Path:
     return d
 
 
+_LAYOUT_ENGINE: Any = None
+_LAYOUT_LOCK = threading.Lock()
+
+
+def _get_layout_engine() -> Any:
+    global _LAYOUT_ENGINE
+    if _LAYOUT_ENGINE is None:
+        with _LAYOUT_LOCK:
+            if _LAYOUT_ENGINE is None:
+                try:
+                    from rapid_layout import RapidLayout
+
+                    try:
+                        _LAYOUT_ENGINE = RapidLayout(engine_cfg={"use_cuda": True})
+                    except Exception:
+                        _LAYOUT_ENGINE = RapidLayout()
+                except Exception as exc:
+                    logger.debug("rapid_layout not available: %s", exc)
+                    _LAYOUT_ENGINE = False
+    return _LAYOUT_ENGINE if _LAYOUT_ENGINE is not False else None
+
+
+def extract_layout_figures(
+    raster: Any,
+    page_num: int,
+    output_dir: Path,
+    did: str,
+    *,
+    conf_thresh: float = 0.5,
+    min_size: int = 100,
+) -> tuple[list[str], int]:
+    """Extract figures from a page raster using PP-Structure Layout (rapid_layout)."""
+    engine = _get_layout_engine()
+    if engine is None:
+        return [], 0
+
+    try:
+        res = engine(raster)
+    except Exception as exc:
+        logger.warning("page %d: layout detection failed: %s", page_num + 1, exc)
+        return [], 0
+
+    h, w = raster.shape[:2]
+    page_area = h * w
+    saved: list[str] = []
+    fig_idx = 0
+    img_dir = page_images_dir(output_dir, did)
+
+    import cv2
+
+    for box, label, score in zip(res.boxes, res.class_names, res.scores):
+        if label == "figure" and score >= conf_thresh:
+            x0, y0, x1, y1 = [int(v) for v in box]
+            bw = x1 - x0
+            bh = y1 - y0
+            if bw < min_size or bh < min_size:
+                continue
+            if bw * bh >= 0.85 * page_area:
+                continue
+            x0 = max(0, min(w - 1, x0))
+            x1 = max(0, min(w, x1))
+            y0 = max(0, min(h - 1, y0))
+            y1 = max(0, min(h, y1))
+            if x1 <= x0 or y1 <= y0:
+                continue
+
+            crop = raster[y0:y1, x0:x1]
+            img_dir.mkdir(parents=True, exist_ok=True)
+            fname = f"page{page_num + 1:04d}_figure_{fig_idx:02d}.png"
+            fpath = img_dir / fname
+            # raster is RGB (from page_raster_array or pymupdf pixmap), cv2 expects BGR
+            cv2.imwrite(str(fpath), cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
+            saved.append(str(fpath.relative_to(output_dir)))
+            fig_idx += 1
+
+    return saved, 0
+
+
+def extract_djvu_images(
+    page: PageResult,
+    djvu_path: str,
+    output_dir: Path,
+    *,
+    conf_thresh: float = 0.5,
+    min_size: int = 100,
+) -> tuple[list[str], int]:
+    """Extract figures from a DJVU page using Layout Analysis (RapidLayout / PP-Structure)."""
+    from pdf_router.rasterize import page_raster_array
+
+    try:
+        raster = page_raster_array(djvu_path, page.page)
+    except Exception as exc:
+        logger.warning("page %d: djvu rasterization failed: %s", page.page + 1, exc)
+        return [], 0
+
+    did = doc_id_from_path(djvu_path)
+    return extract_layout_figures(
+        raster, page.page, output_dir, did,
+        conf_thresh=conf_thresh, min_size=min_size
+    )
+
+
 def extract_page_images(
     page: PageResult,
     pdf_path: str,
@@ -105,6 +208,8 @@ def extract_page_images(
     min_thin: int = 0,
     full_page_min_ink: float = 0.0,
     vector_min_share: float = _DEFAULT_VECTOR_MIN_SHARE,
+    layout_figures: bool = False,
+    layout_conf_thresh: float = 0.5,
 ) -> tuple[list[str], int]:
     """Extract raster photos and/or vector diagrams from one page.
 
@@ -114,7 +219,7 @@ def extract_page_images(
     rasters refused by the size gate. ``([], 0)`` when both flags are off
     or the page yields nothing.
     """
-    if not raster and not vector:
+    if not raster and not vector and not layout_figures:
         return [], 0
 
     import pymupdf
@@ -142,6 +247,29 @@ def extract_page_images(
                 _extract_vector_diagrams(pymupdf_page, page, output_dir, img_dir,
                                         min_share=vector_min_share)
             )
+        if (
+            layout_figures
+            and not saved
+            and (
+                getattr(page, "needs_ocr", False)
+                or not pymupdf_page.get_text().strip()
+                or bool(pymupdf_page.get_images())
+            )
+        ):
+            import numpy as np
+
+            pix = pymupdf_page.get_pixmap(dpi=200, alpha=False)
+            raster_arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+                (pix.height, pix.width, 3)
+            )
+            l_saved, _ = extract_layout_figures(
+                raster_arr,
+                page.page,
+                output_dir,
+                did,
+                conf_thresh=layout_conf_thresh,
+            )
+            saved.extend(l_saved)
     finally:
         doc.close()
 

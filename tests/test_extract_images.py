@@ -175,3 +175,4 @@ def test_process_pdf_ir_json_has_images_per_page() -> None:
             f"expected at least 2 pages with images, got {len(pages_with_imgs)}: "
             f"{[p.page for p in pages_with_imgs]}"
         )
+

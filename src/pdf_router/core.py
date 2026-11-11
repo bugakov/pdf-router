@@ -126,10 +126,10 @@ def _engine_to_src_tool(engine: str) -> SrcTool:
 def _collect_page_images(result: Any, source_format: str) -> tuple[list[str], int]:
     """Split an image-pass result into (saved paths, dropped count).
 
-    pdf returns ``(saved, dropped)`` (size gate); docx/doc return ``[saved]``
+    pdf and djvu return ``(saved, dropped)`` (size gate); docx/doc return ``[saved]``
     (no gate there). One place, both collection loops share it.
     """
-    if source_format == "pdf":
+    if source_format in ("pdf", "djvu"):
         saved, dropped = result
         return saved, dropped
     return result, 0
@@ -313,6 +313,8 @@ def process_pdf(
                         min_thin=routing_cfg.images_min_thin,
                         full_page_min_ink=routing_cfg.images_full_page_min_ink,
                         vector_min_share=routing_cfg.images_vector_min_share,
+                        layout_figures=routing_cfg.extract_layout_figures,
+                        layout_conf_thresh=routing_cfg.layout_conf_thresh,
                     )
                 elif source_format == "docx":
                     from pdf_router.adapters.docx import extract_docx_images
@@ -326,8 +328,18 @@ def process_pdf(
                     img_fut = pool.submit(
                         extract_doc_images, page, pdf_path, output_dir
                     )
-                # djvu/xlsx/html: img_fut stays None — page.images = []
-                # (TKT-DJV-06; xlsx/html have no media, ADR-0008).
+                elif source_format == "djvu":
+                    if routing_cfg.extract_layout_figures:
+                        from pdf_router.extract_images import extract_djvu_images
+
+                        img_fut = pool.submit(
+                            extract_djvu_images,
+                            page,
+                            pdf_path,
+                            output_dir,
+                            conf_thresh=routing_cfg.layout_conf_thresh,
+                        )
+                # xlsx/html: img_fut stays None — page.images = [] (ADR-0008).
             txt_fut = (
                 pool.submit(text_worker, page, pdf_path, config)
                 if run_text_pass

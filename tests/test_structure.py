@@ -417,3 +417,34 @@ def test_e2e_scan_page_blocks_in_json() -> None:
     finally:
         tmp_pdf.unlink(missing_ok=True)
         tmp_pdf.parent.rmdir()
+
+
+def test_table_pass_skips_when_engine_is_none(monkeypatch) -> None:
+    """table_engine='none' short-circuits table extraction."""
+    from pdf_router.config import RouterConfig
+    from pdf_router.structure import _table_pass
+    import numpy as np
+
+    cfg = RouterConfig()
+    cfg.structure.table_engine = "none"
+    raster = np.zeros((100, 100, 3), dtype=np.uint8)
+    blocks, bbox = _table_pass(raster, [(np.zeros((4, 2)), "test", 0.9)], cfg)
+    assert blocks == []
+    assert bbox is None
+
+
+def test_table_pass_skips_when_layout_detects_no_table(monkeypatch) -> None:
+    """_table_pass fast-gates out when layout engine confirms no tables on the page."""
+    from pdf_router.config import RouterConfig
+    from pdf_router.structure import _table_pass
+    import numpy as np
+
+    cfg = RouterConfig()
+    cfg.structure.table_engine = "lineless"
+    raster = np.zeros((100, 100, 3), dtype=np.uint8)
+
+    monkeypatch.setattr("pdf_router.structure._has_table_in_layout", lambda r: False)
+    blocks, bbox = _table_pass(raster, [(np.zeros((4, 2)), "test", 0.9)], cfg)
+    assert blocks == []
+    assert bbox is None
+

@@ -131,6 +131,28 @@ def _get_table_engine(kind: str):
 # ---------------------------------------------------------------------------
 
 
+def _has_table_in_layout(raster: Any) -> bool | None:
+    """Fast layout gate: check if the page has a table using RapidLayout.
+
+    Returns True if a table or table_caption is detected, False if none,
+    or None if the layout engine is unavailable / failed (fallback to table pass).
+    """
+    try:
+        from pdf_router.extract_images import _get_layout_engine
+
+        engine = _get_layout_engine()
+        if engine is None:
+            return None
+        res = engine(raster)
+        return any(
+            name in ("table", "table_caption") and score >= 0.4
+            for name, score in zip(res.class_names, res.scores)
+        )
+    except Exception as exc:
+        logger.debug("layout table gate check skipped: %s", exc)
+        return None
+
+
 def _table_pass(raster: Any, ocr_result: list, config: RouterConfig) -> tuple[list[TableBlock], BBox | None]:
     """Run the configured table engine over the OCR lines.
 
@@ -140,6 +162,15 @@ def _table_pass(raster: Any, ocr_result: list, config: RouterConfig) -> tuple[li
     whose OCR text is already good.
     """
     kind = config.structure.table_engine
+    if kind == "none":
+        return [], None
+
+    # Fast gate: if a layout engine is available (e.g. rapid_layout on GPU),
+    # skip heavy table reconstruction on pages that contain no tables.
+    has_table = _has_table_in_layout(raster)
+    if has_table is False:
+        return [], None
+
     try:
         engine = _get_table_engine(kind)
     except Exception as exc:

@@ -65,7 +65,7 @@ _KNOWN_STRUCTURE_KEYS = {"table_engine", "heading_big_ratio", "heading_small_rat
 #: load until the classifier wheel is vendored — a config that silently
 #: selects a non-existent engine would only surface as a runtime error on
 #: the first scanned page.
-_VALID_TABLE_ENGINES = ("lineless", "wired")
+_VALID_TABLE_ENGINES = ("lineless", "wired", "none")
 
 
 #: Accepted values for ``[renderers.chunks].summary`` (map v0.7, ADR-0006

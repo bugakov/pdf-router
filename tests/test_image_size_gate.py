@@ -123,3 +123,14 @@ def test_process_pdf_counts_dropped_images() -> None:
         ir, report = process_pdf(str(pdf), cfg, output_dir=Path(tmp) / "out")
         assert report.images_dropped == 2
         assert len(ir.pages[0].images) == 2
+
+
+def test_aspect_ratio_gate() -> None:
+    # A 2647x110 horizontal slice has AR ~24.0, should be dropped with max_aspect_ratio=4.0
+    assert not keep_raster_photo(2647, 110, max_aspect_ratio=4.0)
+    # A 50x1200 vertical slice has AR 24.0, should be dropped
+    assert not keep_raster_photo(50, 1200, max_aspect_ratio=4.0)
+    # A 800x600 photo has AR 1.33, should be kept
+    assert keep_raster_photo(800, 600, max_aspect_ratio=4.0)
+    # Off when 0.0
+    assert keep_raster_photo(2647, 110, max_aspect_ratio=0.0)

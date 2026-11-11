@@ -55,6 +55,7 @@ _KNOWN_ROUTING_KEYS = {
     "images_vector_min_share",
     "images_min_size",
     "images_min_thin",
+    "images_max_aspect_ratio",
     "ocr_fallback_engine",
     "garbled_text_policy",
 }
@@ -163,6 +164,7 @@ class RoutingConfig:
     images_vector_min_share: float = 0.05
     images_min_size: int = 150
     images_min_thin: int = 8
+    images_max_aspect_ratio: float = 4.0
     # Default rapidocr: PP-OCRv6 small det + PP-OCRv5 mobile rec is the
     # only combination that actually recognizes Cyrillic (validated in
     # TKT-OC-02; pdf_inspector_ocr's dictionary has zero Cyrillic tokens).
@@ -414,6 +416,8 @@ def _parse_routing(sec: Any) -> RoutingConfig:
         cfg.images_min_size = int(sec["images_min_size"])
     if "images_min_thin" in sec:
         cfg.images_min_thin = int(sec["images_min_thin"])
+    if "images_max_aspect_ratio" in sec:
+        cfg.images_max_aspect_ratio = float(sec["images_max_aspect_ratio"])
     if "ocr_fallback_engine" in sec:
         cfg.ocr_fallback_engine = str(sec["ocr_fallback_engine"])
     # garbled_text_policy was added to RoutingConfig but never read here, so

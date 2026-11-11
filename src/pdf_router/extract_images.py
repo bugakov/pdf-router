@@ -65,19 +65,22 @@ MIN_PHOTO_SIZE = 150
 MIN_PHOTO_THIN = 8
 
 
-def keep_raster_photo(w: int, h: int, *, min_size: int = 0, min_thin: int = 0) -> bool:
+def keep_raster_photo(
+    w: int, h: int, *, min_size: int = 0, min_thin: int = 0, max_aspect_ratio: float = 0.0
+) -> bool:
     """True if a raster of ``w``×``h`` px is worth extracting.
 
     Pure predicate (no IO): the TDD seam for the size gate. The rule is
-    exactly "both sides small" OR "thin side sliver" — deliberately no
-    degenerate-size special case, so with both thresholds at 0 the predicate
-    keeps everything (library default, no behaviour change for existing
-    consumers unless they opt in). Doubtful content (narrow charts,
-    panoramas, tall strips) is kept; only proven junk goes.
+    exactly "both sides small" OR "thin side sliver" OR "extreme aspect ratio" —
+    deliberately no degenerate-size special case, so with all thresholds at 0 the
+    predicate keeps everything (library default, no behaviour change for existing
+    consumers unless they opt in). Doubtful content is kept; only proven junk goes.
     """
     if min_size > 0 and w < min_size and h < min_size:
         return False
     if min_thin > 0 and min(w, h) < min_thin:
+        return False
+    if max_aspect_ratio > 0.0 and min(w, h) > 0 and max(w, h) / min(w, h) > max_aspect_ratio:
         return False
     return True
 
@@ -206,6 +209,7 @@ def extract_page_images(
     vector: bool,
     min_size: int = 0,
     min_thin: int = 0,
+    max_aspect_ratio: float = 0.0,
     full_page_min_ink: float = 0.0,
     vector_min_share: float = _DEFAULT_VECTOR_MIN_SHARE,
     layout_figures: bool = False,
@@ -238,6 +242,7 @@ def extract_page_images(
             s, d = _extract_raster_photos(
                 doc, pymupdf_page, page, output_dir, img_dir,
                 min_size=min_size, min_thin=min_thin,
+                max_aspect_ratio=max_aspect_ratio,
                 full_page_min_ink=full_page_min_ink,
             )
             saved.extend(s)
@@ -345,6 +350,7 @@ def _extract_raster_photos(
     *,
     min_size: int = 0,
     min_thin: int = 0,
+    max_aspect_ratio: float = 0.0,
     full_page_min_ink: float = 0.0,
 ) -> tuple[list[str], int]:
     """Extract embedded raster images (JPEG, PNG, etc.) from an open page.
@@ -397,9 +403,10 @@ def _extract_raster_photos(
                 dropped += 1
                 continue
 
-        # Filter: size gate — icons, thumbnails, separator rules.
+        # Filter: size gate — icons, thumbnails, separator rules, and extreme aspect ratio slices.
         if not keep_raster_photo(
-            img_width, img_height, min_size=min_size, min_thin=min_thin
+            img_width, img_height,
+            min_size=min_size, min_thin=min_thin, max_aspect_ratio=max_aspect_ratio
         ):
             dropped += 1
             continue

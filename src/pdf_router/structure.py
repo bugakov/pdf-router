@@ -94,20 +94,28 @@ def _get_table_engine(kind: str):
         # pin as ocr._rapidocr_get_engine (OpenMP futex hang insurance).
         import numpy  # noqa: F401  (imported for native init order)
 
+        import onnxruntime as ort
+
+        use_cuda = "CUDAExecutionProvider" in ort.get_available_providers()
+
         if kind == "lineless":
             from lineless_table_rec.main import (
                 LinelessTableInput,
                 LinelessTableRecognition,
             )
 
-            engine = LinelessTableRecognition(LinelessTableInput())
+            engine = LinelessTableRecognition(
+                LinelessTableInput(use_cuda=use_cuda, device="gpu" if use_cuda else "cpu")
+            )
         elif kind == "wired":
             from wired_table_rec.main import (
                 WiredTableInput,
                 WiredTableRecognition,
             )
 
-            engine = WiredTableRecognition(WiredTableInput(model_type="unet"))
+            engine = WiredTableRecognition(
+                WiredTableInput(model_type="unet", use_cuda=use_cuda, device="gpu" if use_cuda else "cpu")
+            )
         else:
             raise StructureError(
                 f"structure.table_engine = {kind!r} not available "

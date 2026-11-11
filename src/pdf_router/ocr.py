@@ -209,7 +209,7 @@ def _rapidocr_build_engine(config: RouterConfig) -> dict[str, Any]:
     det_model_type = str(params.get("det_model_type", "small"))
     rec_model_type = str(params.get("rec_model_type", "mobile"))
 
-    return {
+    res = {
         "Global.use_cls": False,
         "Det.engine_type": EngineType.ONNXRUNTIME,
         "Det.ocr_version": OCRVersion.PPOCRV6,
@@ -220,6 +220,12 @@ def _rapidocr_build_engine(config: RouterConfig) -> dict[str, Any]:
         "Rec.model_type": getattr(ModelType, rec_model_type.upper()),
         "Rec.lang_type": _rapidocr_language(config),
     }
+    if params.get("use_cuda"):
+        res["EngineConfig.onnxruntime.use_cuda"] = True
+    for k, v in params.items():
+        if "." in k:
+            res[k] = v
+    return res
 
 
 def _rapidocr_get_engine(config: RouterConfig):

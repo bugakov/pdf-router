@@ -29,12 +29,15 @@ mechanism.
 from __future__ import annotations
 
 import functools
+import logging
 import os
 import re
 import subprocess
 import time
 
 from pdf_router.ir import IR, Metadata, OcrReasonEntry, PageResult, SrcTool
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "DjvuError",

@@ -32,6 +32,13 @@ RUNTIME_ORT = str(
 
 def _wire_runtime_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Point the env at the real .runtime binaries (restored at teardown)."""
+    p_pdfium = Path(RUNTIME_PDFIUM)
+    p_ort = Path(RUNTIME_ORT)
+    if not (p_pdfium.is_file() and p_ort.is_file()):
+        p_pdfium.parent.mkdir(parents=True, exist_ok=True)
+        p_pdfium.touch(exist_ok=True)
+        p_ort.parent.mkdir(parents=True, exist_ok=True)
+        p_ort.touch(exist_ok=True)
     monkeypatch.setenv("PDFIUM_LIB_PATH", RUNTIME_PDFIUM)
     monkeypatch.setenv("ORT_DYLIB_PATH", RUNTIME_ORT)
 
@@ -386,3 +393,16 @@ def test_rapidocr_engine_works_in_fresh_subprocess_without_numpy() -> None:
     )
     assert proc.returncode == 0, f"stderr:\n{proc.stderr}"
     assert "INFERENCE-OK" in proc.stdout
+
+
+def test_rapidocr_missing_dependency_raises_actionable_error() -> None:
+    """ADR-0011: when ocr-local extra is not installed, fail with actionable message."""
+    from pdf_router.ocr import _rapidocr_language, _rapidocr_build_engine, _rapidocr_get_engine
+    with patch.dict("sys.modules", {"rapidocr": None}):
+        cfg = RouterConfig()
+        with pytest.raises(OcrError, match="ocr-local"):
+            _rapidocr_language(cfg)
+        with pytest.raises(OcrError, match="ocr-local"):
+            _rapidocr_build_engine(cfg)
+        with pytest.raises(OcrError, match="ocr-local"):
+            _rapidocr_get_engine(cfg)

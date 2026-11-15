@@ -185,7 +185,14 @@ def _rapidocr_language(config: RouterConfig):
     Public for tests. Returns a LangRec member; default is ESLAV
     (project's primary corpus is Russian).
     """
-    from rapidocr import LangRec
+    try:
+        from rapidocr import LangRec
+    except ImportError as exc:
+        raise OcrError(
+            "rapidocr is not installed. Install with `uv sync --extra ocr-local` "
+            "(or `pip install 'pdf-router[ocr-local]'`) "
+            "or configure an alternative engine (e.g. tesseract, glm_ocr, deepseek_ocr)."
+        ) from exc
 
     name = _LANGUAGE_TO_LANG_REC.get(config.routing.language, _LANG_REC_DEFAULT)
     return getattr(LangRec, name)
@@ -203,7 +210,14 @@ def _rapidocr_build_engine(config: RouterConfig) -> dict[str, Any]:
     comes from ``routing.language``; with no hint we fall back to ESLAV
     (project's primary corpus).
     """
-    from rapidocr import EngineType, LangDet, ModelType, OCRVersion
+    try:
+        from rapidocr import EngineType, LangDet, ModelType, OCRVersion
+    except ImportError as exc:
+        raise OcrError(
+            "rapidocr is not installed. Install with `uv sync --extra ocr-local` "
+            "(or `pip install 'pdf-router[ocr-local]'`) "
+            "or configure an alternative engine (e.g. tesseract, glm_ocr, deepseek_ocr)."
+        ) from exc
 
     params = _lookup_params(config, "rapidocr")
     det_model_type = str(params.get("det_model_type", "small"))
@@ -264,7 +278,14 @@ def _rapidocr_get_engine(config: RouterConfig):
         # No env mutation involved — import order only.
         import numpy  # noqa: F401  (imported for native init order)
 
-        from rapidocr import RapidOCR
+        try:
+            from rapidocr import RapidOCR
+        except ImportError as exc:
+            raise OcrError(
+                "rapidocr is not installed. Install with `uv sync --extra ocr-local` "
+                "(or `pip install 'pdf-router[ocr-local]'`) "
+                "or configure an alternative engine (e.g. tesseract, glm_ocr, deepseek_ocr)."
+            ) from exc
 
         engine = RapidOCR(params=params)
         _RAPIDOCR_ENGINE_CACHE[cache_key] = engine

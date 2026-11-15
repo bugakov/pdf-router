@@ -83,11 +83,13 @@ class _BoomEngine:
 @pytest.fixture
 def stub_engine(monkeypatch):
     monkeypatch.setattr(st, "_get_table_engine", lambda kind: _StubEngine())
+    monkeypatch.setattr(st, "_has_table_in_layout", lambda r: True)
 
 
 @pytest.fixture
 def boom_engine(monkeypatch):
     monkeypatch.setattr(st, "_get_table_engine", lambda kind: _BoomEngine())
+    monkeypatch.setattr(st, "_has_table_in_layout", lambda r: True)
 
 
 def _triple(text: str, x0: float, y0: float, x1: float, y1: float) -> tuple:
@@ -447,4 +449,21 @@ def test_table_pass_skips_when_layout_detects_no_table(monkeypatch) -> None:
     blocks, bbox = _table_pass(raster, [(np.zeros((4, 2)), "test", 0.9)], cfg)
     assert blocks == []
     assert bbox is None
+
+
+def test_structure_missing_dependency_raises_actionable_error() -> None:
+    """ADR-0011: when ocr-local extra is not installed, fail with actionable message."""
+    from unittest.mock import patch
+    from pdf_router.structure import _get_table_engine, StructureError, _STRUCTURE_ENGINE_CACHE
+
+    _STRUCTURE_ENGINE_CACHE.clear()
+    with patch.dict("sys.modules", {"lineless_table_rec": None, "lineless_table_rec.main": None}):
+        with pytest.raises(StructureError, match="ocr-local"):
+            _get_table_engine("lineless")
+    with patch.dict("sys.modules", {"wired_table_rec": None, "wired_table_rec.main": None}):
+        with pytest.raises(StructureError, match="ocr-local"):
+            _get_table_engine("wired")
+    with patch.dict("sys.modules", {"onnxruntime": None}):
+        with pytest.raises(StructureError, match="ocr-local"):
+            _get_table_engine("lineless")
 

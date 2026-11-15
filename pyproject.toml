@@ -7,20 +7,26 @@ license = "AGPL-3.0-only"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    "lineless-table-rec==0.1.0",
     "office-oxide==0.1.12",
-    "onnxruntime>=1.29.0",
     "pdf-inspector>=1.17",
     "pymupdf>=1.27",
-    "rapid-layout>=1.2.1",
-    "rapidocr[onnxruntime]>=3.9.2",
-    "wired-table-rec==1.2.0",
 ]
 
 [project.scripts]
 pdf-router = "pdf_router.cli:main"
 
 [project.optional-dependencies]
+# ADR-0011: Local neural OCR and layout/table reconstruction.
+# rapidocr, lineless/wired table rec and rapid-layout drag in
+# opencv-python, scipy, onnxruntime, etc. (~800 MB). The lean router core
+# does not carry them — they are opt-in for scanned documents.
+ocr-local = [
+    "lineless-table-rec==0.1.0",
+    "onnxruntime>=1.29.0",
+    "rapid-layout>=1.2.1",
+    "rapidocr>=3.9.2",
+    "wired-table-rec==1.2.0",
+]
 tesseract = ["pytesseract>=0.3"]
 cloud = ["requests>=2.31"]
 # ADR-0009: the Docling interchange renderer. docling-core drags in

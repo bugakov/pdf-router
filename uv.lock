@@ -986,14 +986,9 @@ name = "pdf-router"
 version = "0.6.2"
 source = { editable = "." }
 dependencies = [
-    { name = "lineless-table-rec" },
     { name = "office-oxide" },
-    { name = "onnxruntime" },
     { name = "pdf-inspector" },
     { name = "pymupdf" },
-    { name = "rapid-layout" },
-    { name = "rapidocr" },
-    { name = "wired-table-rec" },
 ]
 
 [package.optional-dependencies]
@@ -1008,6 +1003,13 @@ dev = [
 docling = [
     { name = "docling-core" },
 ]
+ocr-local = [
+    { name = "lineless-table-rec" },
+    { name = "onnxruntime" },
+    { name = "rapid-layout" },
+    { name = "rapidocr" },
+    { name = "wired-table-rec" },
+]
 tesseract = [
     { name = "pytesseract" },
 ]
@@ -1015,21 +1017,21 @@ tesseract = [
 [package.metadata]
 requires-dist = [
     { name = "docling-core", marker = "extra == 'docling'", specifier = ">=2.87.0" },
-    { name = "lineless-table-rec", specifier = "==0.1.0" },
+    { name = "lineless-table-rec", marker = "extra == 'ocr-local'", specifier = "==0.1.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13" },
     { name = "office-oxide", specifier = "==0.1.12" },
-    { name = "onnxruntime", specifier = ">=1.29.0" },
+    { name = "onnxruntime", marker = "extra == 'ocr-local'", specifier = ">=1.29.0" },
     { name = "pdf-inspector", specifier = ">=1.17" },
     { name = "pymupdf", specifier = ">=1.27" },
     { name = "pytesseract", marker = "extra == 'tesseract'", specifier = ">=0.3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
-    { name = "rapid-layout", specifier = ">=1.2.1" },
-    { name = "rapidocr", extras = ["onnxruntime"], specifier = ">=3.9.2" },
+    { name = "rapid-layout", marker = "extra == 'ocr-local'", specifier = ">=1.2.1" },
+    { name = "rapidocr", marker = "extra == 'ocr-local'", specifier = ">=3.9.2" },
     { name = "requests", marker = "extra == 'cloud'", specifier = ">=2.31" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9" },
-    { name = "wired-table-rec", specifier = "==1.2.0" },
+    { name = "wired-table-rec", marker = "extra == 'ocr-local'", specifier = "==1.2.0" },
 ]
-provides-extras = ["tesseract", "cloud", "docling", "dev"]
+provides-extras = ["ocr-local", "tesseract", "cloud", "docling", "dev"]
 
 [[package]]
 name = "pillow"

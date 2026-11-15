@@ -10,7 +10,8 @@ document (interchange format, ADR-0009).
 ## Install
 
 ```sh
-uv sync                       # core only (pdf-inspector + pymupdf)
+uv sync                       # core only: lean router (~40MB, born-digital PDF/DOCX/XLSX/DOC/HTML)
+uv sync --extra ocr-local     # local OCR & layout: rapidocr, onnxruntime, lineless/wired tables (ADR-0011)
 uv sync --extra tesseract     # local tesseract OCR
 uv sync --extra cloud         # cloud OCR (glm-ocr, deepseek-ocr)
 uv sync --extra docling       # Docling interchange renderer (ADR-0009)

@@ -94,24 +94,45 @@ def _get_table_engine(kind: str):
         # pin as ocr._rapidocr_get_engine (OpenMP futex hang insurance).
         import numpy  # noqa: F401  (imported for native init order)
 
-        import onnxruntime as ort
+        try:
+            import onnxruntime as ort
+        except ImportError as exc:
+            raise StructureError(
+                f"Table structure engine '{kind}' requires onnxruntime. "
+                "Install with `uv sync --extra ocr-local` (or `pip install 'pdf-router[ocr-local]'`) "
+                "or set [structure].table_engine = 'none'."
+            ) from exc
 
         use_cuda = "CUDAExecutionProvider" in ort.get_available_providers()
 
         if kind == "lineless":
-            from lineless_table_rec.main import (
-                LinelessTableInput,
-                LinelessTableRecognition,
-            )
+            try:
+                from lineless_table_rec.main import (
+                    LinelessTableInput,
+                    LinelessTableRecognition,
+                )
+            except ImportError as exc:
+                raise StructureError(
+                    "Table structure engine 'lineless' requires lineless-table-rec. "
+                    "Install with `uv sync --extra ocr-local` (or `pip install 'pdf-router[ocr-local]'`) "
+                    "or set [structure].table_engine = 'none'."
+                ) from exc
 
             engine = LinelessTableRecognition(
                 LinelessTableInput(use_cuda=use_cuda, device="gpu" if use_cuda else "cpu")
             )
         elif kind == "wired":
-            from wired_table_rec.main import (
-                WiredTableInput,
-                WiredTableRecognition,
-            )
+            try:
+                from wired_table_rec.main import (
+                    WiredTableInput,
+                    WiredTableRecognition,
+                )
+            except ImportError as exc:
+                raise StructureError(
+                    "Table structure engine 'wired' requires wired-table-rec. "
+                    "Install with `uv sync --extra ocr-local` (or `pip install 'pdf-router[ocr-local]'`) "
+                    "or set [structure].table_engine = 'none'."
+                ) from exc
 
             engine = WiredTableRecognition(
                 WiredTableInput(model_type="unet", use_cuda=use_cuda, device="gpu" if use_cuda else "cpu")

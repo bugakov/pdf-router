@@ -91,6 +91,10 @@ def _djvu_fixture(name: str) -> Path:
     p = FIXTURE_DIR / "djvu" / name
     if not p.exists():
         pytest.skip(f"djvu fixture not available: {p}")
+    import shutil
+
+    if shutil.which("djvused") is None:
+        pytest.skip("djvulibre-bin not installed (djvused not on PATH)")
     return p
 
 

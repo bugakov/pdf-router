@@ -23,6 +23,9 @@ native wheel (≥ 1.17). For DJVU input, `djvulibre-bin` must be on `PATH`
 (`djvused`, `djvudump`, `ddjvu` — ADR-0004); PDF/DOCX/XLSX/DOC/HTML need
 no external binaries (DOC parses in-process via the `office-oxide` wheel).
 
+> [!IMPORTANT]
+> **CI & Compilation Policy:** Local Rust compilation (`cargo build`, `cargo test`, `cargo clippy`, `cargo run`) is strictly prohibited on the host to prevent disk exhaustion. All compilation, linting, tests, and artifact verification run exclusively via GitHub Actions CI (`.github/workflows/ci.yml`). See [docs/agents/ci-and-compilation.md](docs/agents/ci-and-compilation.md).
+
 ## Quick start
 
 ```sh

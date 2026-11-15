@@ -1,12 +1,9 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use pdf_router_core::error::RouterError;
-use pdf_router_core::ir::{Block, Ir, Metadata, PageResult, SrcTool};
-use pdf_router_core::ocr::{
-    MockOcrEngine, OcrEngine, OcrError, OcrResult, PageRaster, TesseractEngine,
-};
-use pdf_router_core::{process_document_with_options, ProcessOptions, ProcessingReport};
+use pdf_router_core::ir::Block;
+use pdf_router_core::ocr::{MockOcrEngine, OcrEngine, OcrError, PageRaster, TesseractEngine};
+use pdf_router_core::{process_document_with_options, ProcessOptions};
 
 #[test]
 fn test_page_raster_ppm_conversion() {
@@ -139,7 +136,7 @@ fn test_live_tesseract_if_installed() {
     let result = engine.ocr_page(raster);
     // On an empty white square, tesseract will return empty text (OcrError::Empty) or whitespace
     match result {
-        Ok(res) => {
+        Ok(_res) => {
             assert_eq!(engine.name(), "tesseract");
         }
         Err(OcrError::Empty(idx)) => {

@@ -175,7 +175,9 @@ fn build_control_xlsx() -> Vec<u8> {
         "После пробелов",            // 16
         "Второй лист",               // 17
     ];
-    let mut sst_xml = String::from(r#"<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#);
+    let mut sst_xml = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
+    );
     for s in shared {
         sst_xml.push_str(&format!("<si><t>{s}</t></si>"));
     }

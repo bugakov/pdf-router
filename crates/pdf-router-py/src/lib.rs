@@ -41,7 +41,7 @@ fn extract_ir(ir_obj: &Bound<'_, PyAny>) -> PyResult<Ir> {
         } else {
             ir_obj.clone()
         };
-        depythonize(dict_obj)
+        depythonize(&dict_obj)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
     }
 }

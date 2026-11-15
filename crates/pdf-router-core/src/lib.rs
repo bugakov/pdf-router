@@ -27,6 +27,7 @@ pub fn process_document<P: AsRef<Path>>(path: P) -> Result<Ir, RouterError> {
 
     match format {
         Format::Pdf => adapters::pdf::process_pdf(&bytes, Some(&p.to_string_lossy())),
+        Format::Docx => adapters::docx::process_docx(&bytes, Some(&p.to_string_lossy())),
         _ => {
             let content = String::from_utf8_lossy(&bytes).into_owned();
             let metadata = Metadata {

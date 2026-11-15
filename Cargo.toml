@@ -20,3 +20,6 @@ clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"
 rayon = "1.10"
 regex = "1.11"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+quick-xml = "0.37"
+tempfile = "3"

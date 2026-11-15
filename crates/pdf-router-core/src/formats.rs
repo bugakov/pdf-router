@@ -59,6 +59,14 @@ pub fn detect_format(bytes: &[u8]) -> Format {
 
     // ZIP container (DOCX / XLSX)
     if bytes.starts_with(&[0x50, 0x4B, 0x03, 0x04]) {
+        if let Ok(mut archive) = zip::ZipArchive::new(std::io::Cursor::new(bytes)) {
+            if archive.by_name("word/document.xml").is_ok() {
+                return Format::Docx;
+            }
+            if archive.by_name("xl/workbook.xml").is_ok() {
+                return Format::Xlsx;
+            }
+        }
         return Format::Zip;
     }
 

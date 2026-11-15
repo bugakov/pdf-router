@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use pdf_router_core::adapters::djvu::{
@@ -9,6 +9,11 @@ use pdf_router_core::formats::{detect_format, detect_format_path, Format};
 use pdf_router_core::ir::SrcTool;
 use pdf_router_core::ocr::MockOcrEngine;
 use pdf_router_core::{process_document_with_options, ProcessOptions};
+
+fn fixture_path(rel: &str) -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir.parent().unwrap().parent().unwrap().join(rel)
+}
 
 #[test]
 fn test_ppm_header_parsing_valid() {
@@ -60,8 +65,8 @@ fn test_clean_djvu_control_characters() {
 
 #[test]
 fn test_djvu_format_detection() {
-    let plain_path = Path::new("tests/fixtures/djvu/plain.djvu");
-    let text_layer_path = Path::new("tests/fixtures/djvu/text_layer.djvu");
+    let plain_path = fixture_path("tests/fixtures/djvu/plain.djvu");
+    let text_layer_path = fixture_path("tests/fixtures/djvu/text_layer.djvu");
 
     assert!(plain_path.exists(), "plain.djvu fixture must exist");
     assert!(
@@ -69,13 +74,13 @@ fn test_djvu_format_detection() {
         "text_layer.djvu fixture must exist"
     );
 
-    let plain_bytes = std::fs::read(plain_path).unwrap();
+    let plain_bytes = std::fs::read(&plain_path).unwrap();
     assert_eq!(detect_format(&plain_bytes), Format::Djvu);
-    assert_eq!(detect_format_path(plain_path).unwrap(), Format::Djvu);
+    assert_eq!(detect_format_path(&plain_path).unwrap(), Format::Djvu);
 
-    let text_layer_bytes = std::fs::read(text_layer_path).unwrap();
+    let text_layer_bytes = std::fs::read(&text_layer_path).unwrap();
     assert_eq!(detect_format(&text_layer_bytes), Format::Djvu);
-    assert_eq!(detect_format_path(text_layer_path).unwrap(), Format::Djvu);
+    assert_eq!(detect_format_path(&text_layer_path).unwrap(), Format::Djvu);
 }
 
 #[test]
@@ -86,16 +91,16 @@ fn test_djvu_integration_with_tools() {
         return;
     }
 
-    let text_layer_path = Path::new("tests/fixtures/djvu/text_layer.djvu");
-    let count = djvu_page_count(text_layer_path).expect("djvu_page_count failed");
+    let text_layer_path = fixture_path("tests/fixtures/djvu/text_layer.djvu");
+    let count = djvu_page_count(&text_layer_path).expect("djvu_page_count failed");
     assert_eq!(count, 1);
 
-    let texts = djvu_page_texts(text_layer_path, count).expect("djvu_page_texts failed");
+    let texts = djvu_page_texts(&text_layer_path, count).expect("djvu_page_texts failed");
     assert_eq!(texts.len(), 1);
     assert!(!texts[0].trim().is_empty());
 
     // Test text_layer.djvu full processing
-    let text_layer_bytes = std::fs::read(text_layer_path).unwrap();
+    let text_layer_bytes = std::fs::read(&text_layer_path).unwrap();
     let ir = process_djvu(&text_layer_bytes, Some(text_layer_path.to_str().unwrap()))
         .expect("process_djvu text layer failed");
     assert_eq!(ir.metadata.source_format, "djvu");
@@ -105,8 +110,8 @@ fn test_djvu_integration_with_tools() {
     assert!(!ir.pages[0].markdown.trim().is_empty());
 
     // Test plain.djvu (scanned layerless)
-    let plain_path = Path::new("tests/fixtures/djvu/plain.djvu");
-    let plain_bytes = std::fs::read(plain_path).unwrap();
+    let plain_path = fixture_path("tests/fixtures/djvu/plain.djvu");
+    let plain_bytes = std::fs::read(&plain_path).unwrap();
     let plain_ir = process_djvu(&plain_bytes, Some(plain_path.to_str().unwrap()))
         .expect("process_djvu plain failed");
     assert_eq!(plain_ir.pages.len(), 1);
@@ -121,7 +126,7 @@ fn test_djvu_integration_with_tools() {
         ocr_dpi: Some(150),
     };
 
-    let (ocr_ir, report) = process_document_with_options(plain_path, &opts)
+    let (ocr_ir, report) = process_document_with_options(&plain_path, &opts)
         .expect("OCR pass with mock engine must succeed");
     assert_eq!(ocr_ir.pages[0].src_tool, SrcTool::MockOcr);
     assert_eq!(ocr_ir.pages[0].markdown, "Extracted OCR content");
@@ -137,7 +142,7 @@ fn test_djvu_integration_with_tools() {
         ocr_dpi: Some(150),
     };
 
-    let err = process_document_with_options(plain_path, &strict_failing_opts)
+    let err = process_document_with_options(&plain_path, &strict_failing_opts)
         .expect_err("strict mode must fail on failed page OCR");
     match err {
         RouterError::Processing(msg) => {
@@ -153,7 +158,7 @@ fn test_djvu_integration_with_tools() {
         ocr_dpi: Some(150),
     };
 
-    let (res_ir, res_report) = process_document_with_options(plain_path, &non_strict_failing_opts)
+    let (res_ir, res_report) = process_document_with_options(&plain_path, &non_strict_failing_opts)
         .expect("non-strict must succeed with page error");
     assert!(res_ir.pages[0].error.is_some());
     assert_eq!(res_report.pages_failed, 1);

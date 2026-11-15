@@ -14,7 +14,11 @@ pub use ir::{
     BBox, Block, FigureBlock, FormulaBlock, HeadingBlock, Ir, Metadata, OcrReasonEntry, PageResult,
     SrcTool, TableBlock, IR_VERSION,
 };
-pub use renderers::{render_json, render_markdown};
+pub use renderers::{
+    iter_chunks, iter_zvec_docs, render_chunks, render_json, render_markdown, render_zvec,
+    ChunkEnvelope, ChunkMetadata, ChunksConfig, TableChunkMeta, ZvecConfig, ZvecDocRecord,
+    ZvecFields, ZvecMetadata,
+};
 
 use std::fs;
 use std::path::Path;

@@ -27,6 +27,27 @@ pub enum SrcTool {
     Stub,
 }
 
+impl SrcTool {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SrcTool::PdfInspector => "pdf_inspector",
+            SrcTool::DocxAdapter => "docx_adapter",
+            SrcTool::DjvuAdapter => "djvu_adapter",
+            SrcTool::DjvuTextLayer => "djvu_text_layer",
+            SrcTool::XlsxAdapter => "xlsx_adapter",
+            SrcTool::DocAdapter => "doc_adapter",
+            SrcTool::HtmlAdapter => "html_adapter",
+            SrcTool::Stub => "stub",
+        }
+    }
+}
+
+impl std::fmt::Display for SrcTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HeadingBlock {
     pub level: usize,
@@ -168,5 +189,21 @@ impl Ir {
             metadata,
             pages,
         }
+    }
+
+    /// Streaming iterator over RAG hybrid chunks.
+    pub fn iter_chunks<'a>(
+        &'a self,
+        config: &crate::renderers::ChunksConfig,
+    ) -> crate::renderers::chunks::ChunksIterator<'a> {
+        crate::renderers::iter_chunks(self, config)
+    }
+
+    /// Streaming iterator over zvec Doc records.
+    pub fn iter_zvec_docs<'a>(
+        &'a self,
+        config: &crate::renderers::ZvecConfig,
+    ) -> crate::renderers::zvec::ZvecDocsIterator<'a> {
+        crate::renderers::iter_zvec_docs(self, config)
     }
 }

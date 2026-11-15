@@ -2,13 +2,18 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use pdf_router_core::{process_document, render_json, render_markdown};
+use pdf_router_core::{
+    process_document, render_chunks, render_json, render_markdown, render_zvec, ChunksConfig,
+    ZvecConfig,
+};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum RenderTarget {
     Md,
     Json,
+    Chunks,
+    Zvec,
 }
 
 #[derive(Parser, Debug)]
@@ -55,6 +60,14 @@ fn main() -> Result<()> {
         RenderTarget::Json => {
             let json = render_json(&ir)?;
             println!("{}", json);
+        }
+        RenderTarget::Chunks => {
+            let chunks = render_chunks(&ir, &ChunksConfig::default());
+            print!("{}", chunks);
+        }
+        RenderTarget::Zvec => {
+            let zvec = render_zvec(&ir, &ZvecConfig::default());
+            print!("{}", zvec);
         }
     }
 

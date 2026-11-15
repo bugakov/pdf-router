@@ -1,4 +1,4 @@
-//! Output renderers (Markdown, JSON).
+//! Markdown renderer.
 
 use crate::ir::Ir;
 
@@ -14,9 +14,4 @@ pub fn render_markdown(ir: &Ir) -> String {
         }
     }
     parts.join("\n\n")
-}
-
-/// Render an IR to formatted JSON string.
-pub fn render_json(ir: &Ir) -> Result<String, serde_json::Error> {
-    serde_json::to_string_pretty(ir)
 }

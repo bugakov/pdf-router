@@ -71,7 +71,7 @@ jobs:
           tar -xzf /tmp/ort.tgz -C .runtime
 
       - name: Install project + dev tools
-        run: uv sync --extra dev --locked
+        run: uv sync --extra dev --extra ocr-local --locked
 
       - name: Ruff (lint)
         run: uv run ruff check src tests

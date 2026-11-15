@@ -16,6 +16,7 @@ zip.workspace = true
 quick-xml.workspace = true
 office_oxide = { workspace = true }
 sha2 = { workspace = true }
+tempfile = { workspace = true }
 
 [dev-dependencies]
 serde_json.workspace = true

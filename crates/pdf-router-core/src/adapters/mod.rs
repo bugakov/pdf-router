@@ -1,5 +1,6 @@
 //! Format-specific adapters.
 
+pub mod djvu;
 pub mod doc;
 pub mod docx;
 pub mod html;

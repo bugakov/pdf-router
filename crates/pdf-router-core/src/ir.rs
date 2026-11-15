@@ -18,12 +18,19 @@ pub struct BBox {
 #[serde(rename_all = "snake_case")]
 pub enum SrcTool {
     PdfInspector,
+    TextLayerUnusable,
+    Rapidocr,
+    PdfInspectorOcr,
+    Tesseract,
+    GlmOcr,
+    DeepseekOcr,
     DocxAdapter,
     DjvuAdapter,
     DjvuTextLayer,
     XlsxAdapter,
     DocAdapter,
     HtmlAdapter,
+    MockOcr,
     Stub,
 }
 
@@ -31,13 +38,32 @@ impl SrcTool {
     pub fn as_str(&self) -> &'static str {
         match self {
             SrcTool::PdfInspector => "pdf_inspector",
+            SrcTool::TextLayerUnusable => "text_layer_unusable",
+            SrcTool::Rapidocr => "rapidocr",
+            SrcTool::PdfInspectorOcr => "pdf_inspector_ocr",
+            SrcTool::Tesseract => "tesseract",
+            SrcTool::GlmOcr => "glm_ocr",
+            SrcTool::DeepseekOcr => "deepseek_ocr",
             SrcTool::DocxAdapter => "docx_adapter",
             SrcTool::DjvuAdapter => "djvu_adapter",
             SrcTool::DjvuTextLayer => "djvu_text_layer",
             SrcTool::XlsxAdapter => "xlsx_adapter",
             SrcTool::DocAdapter => "doc_adapter",
             SrcTool::HtmlAdapter => "html_adapter",
+            SrcTool::MockOcr => "mock_ocr",
             SrcTool::Stub => "stub",
+        }
+    }
+
+    pub fn from_engine(name: &str) -> Self {
+        match name {
+            "tesseract" => SrcTool::Tesseract,
+            "rapidocr" => SrcTool::Rapidocr,
+            "pdf_inspector_ocr" => SrcTool::PdfInspectorOcr,
+            "glm_ocr" => SrcTool::GlmOcr,
+            "deepseek_ocr" => SrcTool::DeepseekOcr,
+            "mock" | "mock_ocr" => SrcTool::MockOcr,
+            _ => SrcTool::Stub,
         }
     }
 }
@@ -47,7 +73,6 @@ impl std::fmt::Display for SrcTool {
         write!(f, "{}", self.as_str())
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HeadingBlock {
     pub level: usize,

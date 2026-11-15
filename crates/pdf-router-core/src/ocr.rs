@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::ir::{Block, PageResult, SrcTool};
+use crate::ir::Block;
 
 /// In-memory page raster passed to OCR engines.
 #[derive(Debug, Clone, PartialEq)]

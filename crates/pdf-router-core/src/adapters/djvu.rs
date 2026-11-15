@@ -1,6 +1,5 @@
 //! DJVU adapter invoking djvulibre CLI tools (`djvused`, `djvudump`, `ddjvu`).
 
-use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -89,7 +88,7 @@ pub fn djvu_page_count(path: &Path) -> Result<usize, RouterError> {
 /// Per-page stored DPI parsed from `djvudump <path>`.
 pub fn djvu_stored_dpis(path: &Path) -> Vec<u32> {
     let mut cmd = Command::new("djvudump");
-    cmd.arg(&path.to_string_lossy());
+    cmd.arg(path);
     let Ok(output) = run_cmd(cmd, 30.0) else {
         return vec![];
     };

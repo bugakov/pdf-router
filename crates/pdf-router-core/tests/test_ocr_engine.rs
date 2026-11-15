@@ -20,7 +20,7 @@ fn test_page_raster_ppm_conversion() {
     assert_eq!(ppm.len(), b"P6\n2 2\n255\n".len() + 12);
 
     // 2. Already PPM passthrough
-    let already_ppm = format!("P6\n1 1\n255\n").into_bytes();
+    let already_ppm = b"P6\n1 1\n255\n".to_vec();
     let raster_ppm = PageRaster::new(0, 1, 1, 150, already_ppm.clone());
     assert_eq!(raster_ppm.as_ppm_bytes(), already_ppm);
 }

@@ -324,8 +324,6 @@ impl ProseExtractor {
                         self.flush_paragraph();
                         let level = tag_name[1..].parse::<usize>().unwrap_or(1);
                         self.heading_level = Some(level);
-                    } else if tag_name == "br" {
-                        self.flush_paragraph();
                     } else if BLOCK_TAGS.contains(&tag_name.as_str()) {
                         self.flush_paragraph();
                     }

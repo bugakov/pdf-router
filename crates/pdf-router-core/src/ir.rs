@@ -18,13 +18,34 @@ pub struct BBox {
 #[serde(rename_all = "snake_case")]
 pub enum SrcTool {
     PdfInspector,
+    TextLayerUnusable,
+    Rapidocr,
+    PdfInspectorOcr,
+    Tesseract,
+    GlmOcr,
+    DeepseekOcr,
     DocxAdapter,
     DjvuAdapter,
     DjvuTextLayer,
     XlsxAdapter,
     DocAdapter,
     HtmlAdapter,
+    MockOcr,
     Stub,
+}
+
+impl SrcTool {
+    pub fn from_engine(name: &str) -> Self {
+        match name {
+            "tesseract" => SrcTool::Tesseract,
+            "rapidocr" => SrcTool::Rapidocr,
+            "pdf_inspector_ocr" => SrcTool::PdfInspectorOcr,
+            "glm_ocr" => SrcTool::GlmOcr,
+            "deepseek_ocr" => SrcTool::DeepseekOcr,
+            "mock" | "mock_ocr" => SrcTool::MockOcr,
+            _ => SrcTool::Stub,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

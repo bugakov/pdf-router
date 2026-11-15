@@ -28,6 +28,11 @@ jobs:
       - name: Clippy Linter
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Install system tools (djvulibre, tesseract)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q djvulibre-bin tesseract-ocr
+
       - name: Workspace Tests
         run: cargo test --workspace --verbose
 

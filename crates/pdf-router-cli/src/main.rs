@@ -2,8 +2,12 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use pdf_router_core::{process_document, render_json, render_markdown};
+use pdf_router_core::{
+    process_document_with_options, render_json, render_markdown, MockOcrEngine, OcrEngine,
+    ProcessOptions, TesseractEngine,
+};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum RenderTarget {
@@ -29,18 +33,58 @@ struct Cli {
     /// Show metadata summary only without rendering
     #[arg(long)]
     info: bool,
+
+    /// Abort with error if any page fails processing
+    #[arg(long)]
+    strict: bool,
+
+    /// OCR engine to invoke (e.g. tesseract, mock)
+    #[arg(long)]
+    ocr: Option<String>,
+
+    /// DPI for page rasterization
+    #[arg(long, default_value_t = 200)]
+    ocr_dpi: u32,
+
+    /// Languages for OCR engine (comma-separated, e.g. "eng" or "eng,rus")
+    #[arg(long, default_value = "eng")]
+    ocr_lang: String,
 }
 
 fn main() -> Result<()> {
     let args = Cli::parse();
 
-    let ir = process_document(&args.path)
+    let ocr_engine: Option<Arc<dyn OcrEngine>> = match args.ocr.as_deref() {
+        Some("tesseract") => {
+            let langs: Vec<String> = args
+                .ocr_lang
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            Some(Arc::new(TesseractEngine::new().with_languages(langs)))
+        }
+        Some("mock") => Some(Arc::new(MockOcrEngine::default())),
+        Some(other) => anyhow::bail!("Unsupported OCR engine: {}", other),
+        None => None,
+    };
+
+    let options = ProcessOptions {
+        strict: args.strict,
+        ocr_engine,
+        ocr_dpi: Some(args.ocr_dpi),
+    };
+
+    let (ir, report) = process_document_with_options(&args.path, &options)
         .with_context(|| format!("Failed to process document: {}", args.path.display()))?;
 
     if args.info {
-        println!("format:     {}", ir.metadata.source_format);
-        println!("pdf_type:   {}", ir.metadata.pdf_type);
-        println!("page_count: {}", ir.metadata.page_count);
+        println!("format:       {}", ir.metadata.source_format);
+        println!("pdf_type:     {}", ir.metadata.pdf_type);
+        println!("page_count:   {}", ir.metadata.page_count);
+        println!("pages_native: {}", report.pages_native);
+        println!("pages_ocr:    {}", report.pages_ocr);
+        println!("pages_failed: {}", report.pages_failed);
         return Ok(());
     }
 

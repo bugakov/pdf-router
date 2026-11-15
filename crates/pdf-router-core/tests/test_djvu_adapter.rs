@@ -1,19 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-fn fixture_djvu_path(rel: &str) -> PathBuf {
-    let p = PathBuf::from(rel);
-    if p.exists() {
-        return p;
-    }
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let from_manifest = manifest.join("../../").join(rel);
-    if from_manifest.exists() {
-        return from_manifest;
-    }
-    p
-}
-
 use pdf_router_core::adapters::djvu::{
     clean_djvu_text, djvu_page_count, djvu_page_texts, parse_ppm_header, process_djvu,
 };
@@ -22,6 +9,11 @@ use pdf_router_core::formats::{detect_format, detect_format_path, Format};
 use pdf_router_core::ir::SrcTool;
 use pdf_router_core::ocr::MockOcrEngine;
 use pdf_router_core::{process_document_with_options, ProcessOptions};
+
+fn fixture_path(rel: &str) -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir.parent().unwrap().parent().unwrap().join(rel)
+}
 
 #[test]
 fn test_ppm_header_parsing_valid() {
@@ -73,8 +65,8 @@ fn test_clean_djvu_control_characters() {
 
 #[test]
 fn test_djvu_format_detection() {
-    let plain_path = fixture_djvu_path("tests/fixtures/djvu/plain.djvu");
-    let text_layer_path = fixture_djvu_path("tests/fixtures/djvu/text_layer.djvu");
+    let plain_path = fixture_path("tests/fixtures/djvu/plain.djvu");
+    let text_layer_path = fixture_path("tests/fixtures/djvu/text_layer.djvu");
 
     assert!(plain_path.exists(), "plain.djvu fixture must exist");
     assert!(
@@ -99,32 +91,38 @@ fn test_djvu_integration_with_tools() {
         return;
     }
 
-    let text_layer_path = fixture_djvu_path("tests/fixtures/djvu/text_layer.djvu");
+    let text_layer_path = fixture_path("tests/fixtures/djvu/text_layer.djvu");
     let count = djvu_page_count(&text_layer_path).expect("djvu_page_count failed");
-    assert_eq!(count, 1);
+    assert_eq!(count, 2);
 
     let texts = djvu_page_texts(&text_layer_path, count).expect("djvu_page_texts failed");
-    assert_eq!(texts.len(), 1);
-    assert!(!texts[0].trim().is_empty());
+    assert_eq!(texts.len(), 2);
+    assert_eq!(texts[0], "Hello");
+    assert_eq!(texts[1], "");
 
     // Test text_layer.djvu full processing
     let text_layer_bytes = std::fs::read(&text_layer_path).unwrap();
     let ir = process_djvu(&text_layer_bytes, Some(text_layer_path.to_str().unwrap()))
         .expect("process_djvu text layer failed");
     assert_eq!(ir.metadata.source_format, "djvu");
-    assert_eq!(ir.pages.len(), 1);
+    assert_eq!(ir.pages.len(), 2);
     assert_eq!(ir.pages[0].src_tool, SrcTool::DjvuTextLayer);
     assert!(!ir.pages[0].needs_ocr);
-    assert!(!ir.pages[0].markdown.trim().is_empty());
+    assert_eq!(ir.pages[0].markdown, "Hello");
+    assert_eq!(ir.pages[1].src_tool, SrcTool::DjvuAdapter);
+    assert!(ir.pages[1].needs_ocr);
+    assert_eq!(ir.pages[1].markdown, "");
 
-    // Test plain.djvu (scanned layerless)
-    let plain_path = fixture_djvu_path("tests/fixtures/djvu/plain.djvu");
+    // Test plain.djvu (scanned layerless, 2 pages)
+    let plain_path = fixture_path("tests/fixtures/djvu/plain.djvu");
     let plain_bytes = std::fs::read(&plain_path).unwrap();
     let plain_ir = process_djvu(&plain_bytes, Some(plain_path.to_str().unwrap()))
         .expect("process_djvu plain failed");
-    assert_eq!(plain_ir.pages.len(), 1);
+    assert_eq!(plain_ir.pages.len(), 2);
     assert_eq!(plain_ir.pages[0].src_tool, SrcTool::DjvuAdapter);
     assert!(plain_ir.pages[0].needs_ocr);
+    assert_eq!(plain_ir.pages[1].src_tool, SrcTool::DjvuAdapter);
+    assert!(plain_ir.pages[1].needs_ocr);
 
     // Test OCR pass on plain.djvu with MockOcrEngine
     let mock = Arc::new(MockOcrEngine::new("Extracted OCR content"));
@@ -137,13 +135,17 @@ fn test_djvu_integration_with_tools() {
 
     let (ocr_ir, report) = process_document_with_options(&plain_path, &opts)
         .expect("OCR pass with mock engine must succeed");
+    assert_eq!(ocr_ir.pages.len(), 2);
     assert_eq!(ocr_ir.pages[0].src_tool, SrcTool::MockOcr);
     assert_eq!(ocr_ir.pages[0].markdown, "Extracted OCR content");
     assert!(!ocr_ir.pages[0].needs_ocr);
-    assert_eq!(report.pages_ocr, 1);
+    assert_eq!(ocr_ir.pages[1].src_tool, SrcTool::MockOcr);
+    assert_eq!(ocr_ir.pages[1].markdown, "Extracted OCR content");
+    assert!(!ocr_ir.pages[1].needs_ocr);
+    assert_eq!(report.pages_ocr, 2);
     assert_eq!(report.pages_failed, 0);
 
-    // Test failing OCR on plain.djvu in strict mode
+    // Test failing OCR on plain.djvu in strict mode (page 0 fails)
     let failing_mock = Arc::new(MockOcrEngine::new("Extracted").with_failing_page(0));
     let strict_failing_opts = ProcessOptions {
         strict: true,
@@ -156,12 +158,12 @@ fn test_djvu_integration_with_tools() {
         .expect_err("strict mode must fail on failed page OCR");
     match err {
         RouterError::Processing(msg) => {
-            assert!(msg.contains("strict mode: 1 of 1 pages failed"));
+            assert!(msg.contains("strict mode: 1 of 2 pages failed"));
         }
         other => panic!("Unexpected error: {:?}", other),
     }
 
-    // Test failing OCR on plain.djvu in non-strict mode
+    // Test failing OCR on plain.djvu in non-strict mode (page 0 fails, page 1 succeeds)
     let non_strict_failing_opts = ProcessOptions {
         strict: false,
         ocr_engine: Some(failing_mock),
@@ -169,9 +171,10 @@ fn test_djvu_integration_with_tools() {
         ..ProcessOptions::default()
     };
 
-    let (res_ir, res_report) = process_document_with_options(plain_path, &non_strict_failing_opts)
+    let (res_ir, res_report) = process_document_with_options(&plain_path, &non_strict_failing_opts)
         .expect("non-strict must succeed with page error");
     assert!(res_ir.pages[0].error.is_some());
+    assert!(res_ir.pages[1].error.is_none());
     assert_eq!(res_report.pages_failed, 1);
-    assert_eq!(res_report.pages_ocr, 0);
+    assert_eq!(res_report.pages_ocr, 1);
 }

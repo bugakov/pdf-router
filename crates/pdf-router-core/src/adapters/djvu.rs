@@ -72,7 +72,7 @@ fn run_cmd(mut cmd: Command, timeout_s: f64) -> Result<Output, RouterError> {
 /// Page count via `djvused -u <path> -e n`.
 pub fn djvu_page_count(path: &Path) -> Result<usize, RouterError> {
     let mut cmd = Command::new("djvused");
-    cmd.args(["-u", &path.to_string_lossy(), "-e", "n"]);
+    cmd.arg("-u").arg(path).arg("-e").arg("n");
     let output = run_cmd(cmd, TOOL_TIMEOUT_S)?;
     let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
     text.parse::<usize>().map_err(|e| {
@@ -133,7 +133,7 @@ pub fn djvu_page_texts(path: &Path, count: usize) -> Result<Vec<String>, RouterE
 
     // Fast path: probe whole document
     let mut cmd = Command::new("djvused");
-    cmd.args(["-u", &path.to_string_lossy(), "-e", "print-pure-txt"]);
+    cmd.arg("-u").arg(path).arg("-e").arg("print-pure-txt");
     let whole = match run_cmd(cmd, TOOL_TIMEOUT_S) {
         Ok(output) => clean_djvu_text(&String::from_utf8_lossy(&output.stdout)),
         Err(_) => String::new(),
@@ -151,7 +151,7 @@ pub fn djvu_page_texts(path: &Path, count: usize) -> Result<Vec<String>, RouterE
     for i in 1..=count {
         let mut cmd = Command::new("djvused");
         let expr = format!("select {i}; print-pure-txt");
-        cmd.args(["-u", &path.to_string_lossy(), "-e", &expr]);
+        cmd.arg("-u").arg(path).arg("-e").arg(&expr);
         match run_cmd(cmd, 30.0) {
             Ok(output) => {
                 let cleaned = clean_djvu_text(&String::from_utf8_lossy(&output.stdout));
@@ -260,9 +260,8 @@ pub fn render_page_ppm_djvu(
         "-format=ppm",
         &format!("-page={}", page_idx + 1),
         &format!("-scale={scale}"),
-        &path.to_string_lossy(),
-        "-",
     ]);
+    cmd.arg(path).arg("-");
 
     let output = run_cmd(cmd, TOOL_TIMEOUT_S)?;
     let (w, h, _maxval, offset) = parse_ppm_header(&output.stdout)?;

@@ -6,17 +6,9 @@ use pdf_router_core::ir::Block;
 use pdf_router_core::ocr::{MockOcrEngine, OcrEngine, OcrError, PageRaster, TesseractEngine};
 use pdf_router_core::{process_document_with_options, ProcessOptions};
 
-fn fixture_djvu_path(rel: &str) -> PathBuf {
-    let p = PathBuf::from(rel);
-    if p.exists() {
-        return p;
-    }
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let from_manifest = manifest.join("../../").join(rel);
-    if from_manifest.exists() {
-        return from_manifest;
-    }
-    p
+fn fixture_path(rel: &str) -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir.parent().unwrap().parent().unwrap().join(rel)
 }
 
 #[test]
@@ -96,8 +88,13 @@ fn test_tesseract_engine_config_and_missing_binary() {
 
 #[test]
 fn test_per_page_fault_tolerance_and_strict_mode() {
-    let p27_path = fixture_djvu_path("tests/fixtures/pdf/p27.pdf");
-    let path = &p27_path;
+    let check = std::process::Command::new("djvused").arg("-v").output();
+    if check.is_err() {
+        eprintln!("djvused not found, skipping djvu fault tolerance test");
+        return;
+    }
+
+    let plain_path = fixture_path("tests/fixtures/djvu/plain.djvu");
 
     // 1. Run with mock OCR failing page 0 in strict mode -> fails
     let failing_mock = Arc::new(MockOcrEngine::new("Success").with_failing_page(0));
@@ -108,11 +105,11 @@ fn test_per_page_fault_tolerance_and_strict_mode() {
         ..ProcessOptions::default()
     };
 
-    let err = process_document_with_options(path, &strict_opts)
+    let err = process_document_with_options(&plain_path, &strict_opts)
         .expect_err("strict mode must fail when a page fails");
     match err {
         RouterError::Processing(msg) => {
-            assert!(msg.contains("strict mode: 1 of 1 pages failed"));
+            assert!(msg.contains("strict mode: 1 of 2 pages failed"));
         }
         other => panic!("Unexpected error: {:?}", other),
     }
@@ -125,12 +122,14 @@ fn test_per_page_fault_tolerance_and_strict_mode() {
         ..ProcessOptions::default()
     };
 
-    let (ir, report) =
-        process_document_with_options(path, &non_strict_opts).expect("non-strict must succeed");
-    assert_eq!(ir.pages.len(), 1);
-    assert_eq!(report.pages_total, 1);
+    let (ir, report) = process_document_with_options(&plain_path, &non_strict_opts)
+        .expect("non-strict must succeed");
+    assert_eq!(ir.pages.len(), 2);
+    assert_eq!(report.pages_total, 2);
     assert_eq!(report.pages_failed, 1);
+    assert_eq!(report.pages_ocr, 1);
     assert!(ir.pages[0].error.is_some());
+    assert!(ir.pages[1].error.is_none());
 }
 
 #[test]

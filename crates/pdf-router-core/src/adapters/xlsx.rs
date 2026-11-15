@@ -260,8 +260,8 @@ fn parse_worksheet_xml(xml: &str, shared: &[String]) -> WorksheetData {
                             .map(|h| h == "1" || h.eq_ignore_ascii_case("true"))
                             .unwrap_or(false);
                         if is_hidden {
-                            if let Some(r) = get_attribute_value(e, b"r")
-                                .and_then(|r| r.parse::<usize>().ok())
+                            if let Some(r) =
+                                get_attribute_value(e, b"r").and_then(|r| r.parse::<usize>().ok())
                             {
                                 data.hidden_rows.insert(r);
                             }
@@ -342,10 +342,7 @@ fn parse_worksheet_xml(xml: &str, shared: &[String]) -> WorksheetData {
                                         } else {
                                             String::new()
                                         }
-                                    } else if matches!(
-                                        current_type.as_str(),
-                                        "str" | "e" | "b"
-                                    ) {
+                                    } else if matches!(current_type.as_str(), "str" | "e" | "b") {
                                         v_text.clone()
                                     } else {
                                         clean_number_text(&v_text)
@@ -474,11 +471,7 @@ fn header_rows(rows: &[Vec<String>]) -> usize {
 }
 
 /// Build PageResult for one sheet.
-fn build_sheet_page(
-    index: usize,
-    sheet_name: &str,
-    mut ws: WorksheetData,
-) -> PageResult {
+fn build_sheet_page(index: usize, sheet_name: &str, mut ws: WorksheetData) -> PageResult {
     let width = ws.cells.keys().map(|&(_, c)| c).max().unwrap_or(0);
     apply_merges(
         &mut ws.cells,
@@ -487,12 +480,7 @@ fn build_sheet_page(
         &ws.hidden_cols,
         &ws.hidden_rows,
     );
-    let visible_cols = width.saturating_sub(
-        ws.hidden_cols
-            .iter()
-            .filter(|&&c| c <= width)
-            .count(),
-    );
+    let visible_cols = width.saturating_sub(ws.hidden_cols.iter().filter(|&&c| c <= width).count());
 
     let mut md_parts = vec![format!("## {}", sheet_name)];
     let mut blocks: Vec<Block> = vec![Block::Heading(HeadingBlock {
@@ -548,11 +536,15 @@ pub fn process_xlsx(bytes: &[u8], source_path: Option<&str>) -> Result<Ir, Route
     // 1. Read xl/workbook.xml
     let wb_xml = {
         let mut entry = archive.by_name("xl/workbook.xml").map_err(|e| {
-            RouterError::InvalidDocument(format!("malformed xlsx (unreadable xl/workbook.xml): {e}"))
+            RouterError::InvalidDocument(format!(
+                "malformed xlsx (unreadable xl/workbook.xml): {e}"
+            ))
         })?;
         let mut xml = String::new();
         entry.read_to_string(&mut xml).map_err(|e| {
-            RouterError::InvalidDocument(format!("malformed xlsx (unreadable xl/workbook.xml): {e}"))
+            RouterError::InvalidDocument(format!(
+                "malformed xlsx (unreadable xl/workbook.xml): {e}"
+            ))
         })?;
         xml
     };
@@ -597,11 +589,15 @@ pub fn process_xlsx(bytes: &[u8], source_path: Option<&str>) -> Result<Ir, Route
 
         let sheet_xml = {
             let mut entry = archive.by_name(&part_path).map_err(|e| {
-                RouterError::InvalidDocument(format!("malformed xlsx (unreadable {part_path}): {e}"))
+                RouterError::InvalidDocument(format!(
+                    "malformed xlsx (unreadable {part_path}): {e}"
+                ))
             })?;
             let mut xml = String::new();
             entry.read_to_string(&mut xml).map_err(|e| {
-                RouterError::InvalidDocument(format!("malformed xlsx (unreadable {part_path}): {e}"))
+                RouterError::InvalidDocument(format!(
+                    "malformed xlsx (unreadable {part_path}): {e}"
+                ))
             })?;
             xml
         };

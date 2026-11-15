@@ -91,7 +91,7 @@ fn build_control_xlsx() -> Vec<u8> {
     // 1. [Content_Types].xml
     zip.start_file("[Content_Types].xml", options).unwrap();
     zip.write_all(
-        br#"<?xml version="1.0" encoding="UTF-8"?>
+        r#"<?xml version="1.0" encoding="UTF-8"?>
     <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
         <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
         <Default Extension="xml" ContentType="application/xml"/>
@@ -99,41 +99,45 @@ fn build_control_xlsx() -> Vec<u8> {
         <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
         <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
         <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
-    </Types>"#,
+    </Types>"#
+            .as_bytes(),
     )
     .unwrap();
 
     // 2. _rels/.rels
     zip.start_file("_rels/.rels", options).unwrap();
     zip.write_all(
-        br#"<?xml version="1.0" encoding="UTF-8"?>
+        r#"<?xml version="1.0" encoding="UTF-8"?>
     <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
         <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
         <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
-    </Relationships>"#,
+    </Relationships>"#
+            .as_bytes(),
     )
     .unwrap();
 
     // 3. docProps/core.xml
     zip.start_file("docProps/core.xml", options).unwrap();
     zip.write_all(
-        br#"<?xml version="1.0" encoding="UTF-8"?>
+        r#"<?xml version="1.0" encoding="UTF-8"?>
     <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/">
         <dc:title>Контрольный файл</dc:title>
-    </cp:coreProperties>"#,
+    </cp:coreProperties>"#
+            .as_bytes(),
     )
     .unwrap();
 
     // 4. xl/workbook.xml
     zip.start_file("xl/workbook.xml", options).unwrap();
     zip.write_all(
-        br#"<?xml version="1.0" encoding="UTF-8"?>
+        r#"<?xml version="1.0" encoding="UTF-8"?>
     <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
         <sheets>
             <sheet name="Смета" sheetId="1" r:id="rId1"/>
             <sheet name="Лист2" sheetId="2" r:id="rId2"/>
         </sheets>
-    </workbook>"#,
+    </workbook>"#
+            .as_bytes(),
     )
     .unwrap();
 
@@ -141,11 +145,12 @@ fn build_control_xlsx() -> Vec<u8> {
     zip.start_file("xl/_rels/workbook.xml.rels", options)
         .unwrap();
     zip.write_all(
-        br#"<?xml version="1.0" encoding="UTF-8"?>
+        r#"<?xml version="1.0" encoding="UTF-8"?>
     <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
         <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
         <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
-    </Relationships>"#,
+    </Relationships>"#
+            .as_bytes(),
     )
     .unwrap();
 
@@ -339,29 +344,32 @@ fn test_empty_sheet_is_still_a_page() {
 
     zip.start_file("xl/workbook.xml", options).unwrap();
     zip.write_all(
-        br#"<?xml version="1.0" encoding="UTF-8"?>
+        r#"<?xml version="1.0" encoding="UTF-8"?>
     <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
         <sheets><sheet name="Пустой" sheetId="1" r:id="rId1"/></sheets>
-    </workbook>"#,
+    </workbook>"#
+            .as_bytes(),
     )
     .unwrap();
 
     zip.start_file("xl/_rels/workbook.xml.rels", options)
         .unwrap();
     zip.write_all(
-        br#"<?xml version="1.0" encoding="UTF-8"?>
+        r#"<?xml version="1.0" encoding="UTF-8"?>
     <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
         <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-    </Relationships>"#,
+    </Relationships>"#
+            .as_bytes(),
     )
     .unwrap();
 
     zip.start_file("xl/worksheets/sheet1.xml", options).unwrap();
     zip.write_all(
-        br#"<?xml version="1.0" encoding="UTF-8"?>
+        r#"<?xml version="1.0" encoding="UTF-8"?>
     <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
         <sheetData/>
-    </worksheet>"#,
+    </worksheet>"#
+            .as_bytes(),
     )
     .unwrap();
 

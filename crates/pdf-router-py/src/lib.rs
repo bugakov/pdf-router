@@ -255,6 +255,7 @@ mod tests {
 
     #[test]
     fn test_pyo3_runtime_bindings() {
+        pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
             let m = PyModule::new_bound(py, "pdf_router_native").unwrap();
             pdf_router_native(&m).unwrap();

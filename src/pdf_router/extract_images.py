@@ -91,10 +91,11 @@ def doc_id_from_path(pdf_path: str) -> str:
     return hashlib.sha256(abs_path.encode()).hexdigest()[:12]
 
 
-def page_images_dir(output_dir: Path, doc_id: str) -> Path:
+def page_images_dir(output_dir: Path, doc_id: str, create: bool = True) -> Path:
     """Sidecar images directory for one document."""
     d = output_dir / doc_id / "images"
-    d.mkdir(parents=True, exist_ok=True)
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
     return d
 
 
@@ -144,7 +145,7 @@ def extract_layout_figures(
     page_area = h * w
     saved: list[str] = []
     fig_idx = 0
-    img_dir = page_images_dir(output_dir, did)
+    img_dir = page_images_dir(output_dir, did, create=False)
 
     import cv2
 

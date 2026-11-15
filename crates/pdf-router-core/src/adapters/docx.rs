@@ -384,15 +384,11 @@ pub fn process_docx(bytes: &[u8], source_path: Option<&str>) -> Result<Ir, Route
                             .unwrap_or_else(|| "continue".to_string());
                         current_vmerge = Some(val);
                     }
-                    b"tab" => {
-                        if in_p {
-                            p_text.push('\t');
-                        }
+                    b"tab" if in_p => {
+                        p_text.push('\t');
                     }
-                    b"br" | b"cr" => {
-                        if in_p {
-                            p_text.push('\n');
-                        }
+                    b"br" | b"cr" if in_p => {
+                        p_text.push('\n');
                     }
                     _ => {}
                 }
@@ -440,8 +436,7 @@ pub fn process_docx(bytes: &[u8], source_path: Option<&str>) -> Result<Ir, Route
                         in_tc = false;
                         let cell_text = cell_paragraphs
                             .join(" ")
-                            .replace('\t', " ")
-                            .replace('\n', " ")
+                            .replace(['\t', '\n'], " ")
                             .trim()
                             .to_string();
                         current_row.push(CellDraft {
@@ -467,26 +462,24 @@ pub fn process_docx(bytes: &[u8], source_path: Option<&str>) -> Result<Ir, Route
                         }
                         table_rows.push(row_cells);
                     }
-                    b"tbl" => {
-                        if !table_rows.is_empty() {
-                            table_count += 1;
-                            let width = table_rows.iter().map(|r| r.len()).max().unwrap_or(0);
-                            for row in &mut table_rows {
-                                while row.len() < width {
-                                    row.push(String::new());
-                                }
+                    b"tbl" if !table_rows.is_empty() => {
+                        table_count += 1;
+                        let width = table_rows.iter().map(|r| r.len()).max().unwrap_or(0);
+                        for row in &mut table_rows {
+                            while row.len() < width {
+                                row.push(String::new());
                             }
-                            let table_md = rows_to_markdown(&table_rows);
-                            let header_rows = if table_rows.len() > 1 { 1 } else { 0 };
-                            blocks.push(Block::Table(TableBlock {
-                                markdown: table_md.clone(),
-                                rows: table_rows.clone(),
-                                header_rows,
-                                bbox: None,
-                                source: "markdown_pipe".to_string(),
-                            }));
-                            md_parts.push(table_md);
                         }
+                        let table_md = rows_to_markdown(&table_rows);
+                        let header_rows = if table_rows.len() > 1 { 1 } else { 0 };
+                        blocks.push(Block::Table(TableBlock {
+                            markdown: table_md.clone(),
+                            rows: table_rows.clone(),
+                            header_rows,
+                            bbox: None,
+                            source: "markdown_pipe".to_string(),
+                        }));
+                        md_parts.push(table_md);
                     }
                     _ => {}
                 }

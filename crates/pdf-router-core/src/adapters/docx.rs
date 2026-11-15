@@ -36,7 +36,7 @@ pub fn local_name(name: &[u8]) -> &[u8] {
 /// Helper to get an attribute value matching a local name
 fn get_attribute_value(e: &quick_xml::events::BytesStart, attr_name: &[u8]) -> Option<String> {
     for attr in e.attributes().flatten() {
-        if local_name(attr.key.as_ref()) == attr_name {
+        if local_name(attr.key.into_inner()) == attr_name {
             if let Ok(v) = attr.unescape_value() {
                 return Some(v.into_owned());
             }
@@ -60,7 +60,7 @@ pub fn parse_styles_xml(xml: &str) -> HashMap<String, StyleInfo> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
-                let tag = local_name(e.name().as_ref());
+                let tag = local_name(e.name().into_inner());
                 match tag {
                     b"style" => {
                         current_style_id = get_attribute_value(e, b"styleId");
@@ -91,7 +91,7 @@ pub fn parse_styles_xml(xml: &str) -> HashMap<String, StyleInfo> {
                 }
             }
             Ok(Event::End(ref e)) => {
-                let tag = local_name(e.name().as_ref());
+                let tag = local_name(e.name().into_inner());
                 if tag == b"style" {
                     if let Some(id) = current_style_id.take() {
                         styles.insert(
@@ -125,12 +125,12 @@ pub fn parse_core_title(xml: &str) -> Option<String> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
-                if local_name(e.name().as_ref()) == b"title" {
+                if local_name(e.name().into_inner()) == b"title" {
                     in_title = true;
                 }
             }
             Ok(Event::End(ref e)) => {
-                if local_name(e.name().as_ref()) == b"title" {
+                if local_name(e.name().into_inner()) == b"title" {
                     in_title = false;
                 }
             }
@@ -280,7 +280,6 @@ pub fn process_docx(bytes: &[u8], source_path: Option<&str>) -> Result<Ir, Route
     let mut table_count = 0;
 
     // State machine flags
-    let mut in_table = false;
     let mut in_tc = false;
     let mut in_p = false;
     let mut in_t = false;
@@ -303,10 +302,9 @@ pub fn process_docx(bytes: &[u8], source_path: Option<&str>) -> Result<Ir, Route
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
-                let tag = local_name(e.name().as_ref());
+                let tag = local_name(e.name().into_inner());
                 match tag {
                     b"tbl" => {
-                        in_table = true;
                         open_merge.clear();
                         table_rows.clear();
                     }
@@ -358,7 +356,7 @@ pub fn process_docx(bytes: &[u8], source_path: Option<&str>) -> Result<Ir, Route
                 }
             }
             Ok(Event::Empty(ref e)) => {
-                let tag = local_name(e.name().as_ref());
+                let tag = local_name(e.name().into_inner());
                 match tag {
                     b"pStyle" => {
                         if let Some(val) = get_attribute_value(e, b"val") {
@@ -407,7 +405,7 @@ pub fn process_docx(bytes: &[u8], source_path: Option<&str>) -> Result<Ir, Route
                 }
             }
             Ok(Event::End(ref e)) => {
-                let tag = local_name(e.name().as_ref());
+                let tag = local_name(e.name().into_inner());
                 match tag {
                     b"t" => {
                         in_t = false;
@@ -470,7 +468,6 @@ pub fn process_docx(bytes: &[u8], source_path: Option<&str>) -> Result<Ir, Route
                         table_rows.push(row_cells);
                     }
                     b"tbl" => {
-                        in_table = false;
                         if !table_rows.is_empty() {
                             table_count += 1;
                             let width = table_rows.iter().map(|r| r.len()).max().unwrap_or(0);

@@ -123,6 +123,15 @@ probe — page separators `\f` also occur inside text). Empty/whitespace
 yield means no usable layer → OCR as usual. Rare in practice: 3 of 33
 corpus files carry one (research `docs/wayfinder/research/djvu-tools.md`).
 
+## Idempotence
+
+The architectural contract guaranteeing that parsing a document repeatedly
+always emits byte-identical IR, Markdown, RAG chunks, and zvec records.
+Chunk identifiers, document identifiers, image sidecar names, and page indices
+are derived deterministically from stable content/path hashes with fixed sorting.
+Floating-point bounding box coordinates use deterministic serialization without
+jitter.
+
 ## Inspector
 
 The per-format adapter contract: one callable `path -> IR`
@@ -171,6 +180,14 @@ the native adapter's body walk). Authoritative for the `md` renderer and
 for the **text half** of the `chunks` renderer (pipe tables covered by a
 `TableBlock` are subtracted from it; [ADR-0006](adr/0006-rag-chunks.md)).
 The `blocks` field is **advisory** — it does not override `markdown`.
+
+## Lean Router
+
+The architectural doctrine ([ADR-0011](adr/0011-lean-router-and-rust-roadmap.md))
+separating ultra-fast format routing and born-digital extraction (PDF, DOCX, XLSX,
+DOC, HTML) from heavy neural computer vision and OCR. The router core carries zero
+OpenCV/ONNX/SciPy dependencies; neural OCR and layout recognition are isolated
+into optional extras (`ocr-local`) or external sidecars.
 
 ## MCID (Marked Content ID)
 
@@ -231,6 +248,17 @@ contract (including the no-heavy-imports-at-startup rule).
 
 Raster/vector images extracted next to the rendered material under
 `<output_dir>/<doc-id>/images/page{N:04d}_{kind}_{idx:02d}.{ext}` where
+`doc-id` is the 12-hex hash of the input document path (TKT-RT-12).
+Generated only when `output_dir` is explicitly passed; pure in-memory runs
+emit zero disk sidecars.
+
+## Streaming Pipeline
+
+An iterator-based document processing contract in Rust (`iter_pages()`,
+`iter_zvec_docs()`, `iter_chunks()`) that streams processed pages and records
+without requiring the entire multi-thousand-page document IR to reside in
+memory simultaneously. Memory usage remains bounded O(1) regardless of
+document page count.
 doc-id = 12-hex SHA-256 of the absolute document path (TKT-RT-12 schema).
 PDF: `extract_images.extract_page_images` (pymupdf, per page). DOCX:
 `adapters/docx.py::extract_docx_images` (media parts copied verbatim,

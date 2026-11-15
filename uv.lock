@@ -849,6 +849,7 @@ cloud = [
 ]
 dev = [
     { name = "mypy" },
+    { name = "numpy" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -871,6 +872,7 @@ requires-dist = [
     { name = "docling-core", marker = "extra == 'docling'", specifier = ">=2.87.0" },
     { name = "lineless-table-rec", marker = "extra == 'ocr-local'", specifier = "==0.1.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13" },
+    { name = "numpy", marker = "extra == 'dev'", specifier = ">=1.26" },
     { name = "office-oxide", specifier = "==0.1.12" },
     { name = "onnxruntime", marker = "extra == 'ocr-local'", specifier = ">=1.29.0" },
     { name = "pdf-inspector", specifier = ">=1.17" },

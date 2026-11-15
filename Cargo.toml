@@ -27,6 +27,6 @@ office_oxide = "0.1"
 sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 lopdf = "0.45"
-pyo3 = { version = "0.22", features = ["auto-initialize"] }
+pyo3 = { version = "0.22" }
 pythonize = "0.22"
 toml = "0.8"

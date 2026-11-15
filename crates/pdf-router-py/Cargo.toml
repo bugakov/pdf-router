@@ -19,4 +19,4 @@ toml = { workspace = true }
 
 [features]
 default = []
-extension-module = ["pyo3/extension-module"]
+extension-module = ["pyo3/extension-module", "pyo3/abi3-py312"]

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use pyo3::prelude::*;
-use pythonize::{depythonize_bound, pythonize};
+use pythonize::{depythonize, pythonize};
 
 use pdf_router_core::ir::Ir;
 use pdf_router_core::renderers::{
@@ -41,7 +41,7 @@ fn extract_ir(ir_obj: &Bound<'_, PyAny>) -> PyResult<Ir> {
         } else {
             ir_obj.clone()
         };
-        depythonize_bound(&dict_obj)
+        depythonize(dict_obj)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
     }
 }

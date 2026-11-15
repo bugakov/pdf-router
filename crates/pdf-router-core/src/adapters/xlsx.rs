@@ -213,11 +213,11 @@ pub fn parse_workbook_sheets(xml: &str) -> Result<Vec<SheetDef>, RouterError> {
 
 /// Parsed contents of a single worksheet part.
 #[derive(Debug, Default)]
-struct WorksheetData {
-    hidden_cols: HashSet<usize>,
-    hidden_rows: HashSet<usize>,
-    cells: HashMap<(usize, usize), String>,
-    merges: Vec<(usize, usize, usize, usize)>,
+pub struct WorksheetData {
+    pub hidden_cols: HashSet<usize>,
+    pub hidden_rows: HashSet<usize>,
+    pub cells: HashMap<(usize, usize), String>,
+    pub merges: Vec<(usize, usize, usize, usize)>,
 }
 
 /// Extract hidden column range if `<col>` has hidden="1".

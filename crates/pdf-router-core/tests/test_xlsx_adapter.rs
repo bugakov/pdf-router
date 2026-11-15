@@ -75,7 +75,7 @@ fn test_parse_rels_and_sheets() {
         </sheets>
     </workbook>"#;
 
-    let sheets = parse_workbook_sheets(wb_xml);
+    let sheets = parse_workbook_sheets(wb_xml).expect("parse sheets failed");
     assert_eq!(sheets.len(), 2);
     assert_eq!(sheets[0].name, "Смета");
     assert_eq!(sheets[0].rel_id, "rId1");

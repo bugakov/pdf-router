@@ -163,7 +163,7 @@ pub struct SheetDef {
 }
 
 /// Parse sheet entries from `xl/workbook.xml` in workbook order.
-pub fn parse_workbook_sheets(xml: &str) -> Vec<SheetDef> {
+pub fn parse_workbook_sheets(xml: &str) -> Result<Vec<SheetDef>, RouterError> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -181,13 +181,24 @@ pub fn parse_workbook_sheets(xml: &str) -> Vec<SheetDef> {
                     sheet_idx += 1;
                 }
             }
-            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                return Err(RouterError::InvalidDocument(format!(
+                    "malformed xlsx (unreadable xl/workbook.xml): {e}"
+                )));
+            }
             _ => {}
         }
         buf.clear();
     }
 
-    sheets
+    if sheets.is_empty() {
+        return Err(RouterError::InvalidDocument(
+            "malformed xlsx (no sheets found in xl/workbook.xml)".to_string(),
+        ));
+    }
+
+    Ok(sheets)
 }
 
 /// Parsed contents of a single worksheet part.
@@ -233,7 +244,7 @@ fn extract_merge_cell(
 }
 
 /// Parse a `worksheets/sheet*.xml` stream.
-fn parse_worksheet_xml(xml: &str, shared: &[String]) -> WorksheetData {
+fn parse_worksheet_xml(xml: &str, shared: &[String]) -> Result<WorksheetData, RouterError> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -361,13 +372,18 @@ fn parse_worksheet_xml(xml: &str, shared: &[String]) -> WorksheetData {
                     _ => {}
                 }
             }
-            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                return Err(RouterError::InvalidDocument(format!(
+                    "malformed xlsx (unreadable worksheet XML): {e}"
+                )));
+            }
             _ => {}
         }
         buf.clear();
     }
 
-    data
+    Ok(data)
 }
 
 /// Vertical span: value repeated down. Horizontal span: first cell only.
@@ -577,7 +593,7 @@ pub fn process_xlsx(bytes: &[u8], source_path: Option<&str>) -> Result<Ir, Route
     };
 
     // 5. Parse sheets in order
-    let sheet_defs = parse_workbook_sheets(&wb_xml);
+    let sheet_defs = parse_workbook_sheets(&wb_xml)?;
     let mut pages = Vec::new();
     let mut pages_with_tables = Vec::new();
 
@@ -602,7 +618,7 @@ pub fn process_xlsx(bytes: &[u8], source_path: Option<&str>) -> Result<Ir, Route
             xml
         };
 
-        let ws = parse_worksheet_xml(&sheet_xml, &shared_strings);
+        let ws = parse_worksheet_xml(&sheet_xml, &shared_strings)?;
         let page = build_sheet_page(index, &sheet.name, ws);
         if page.blocks.iter().any(|b| matches!(b, Block::Table(_))) {
             pages_with_tables.push(index + 1);

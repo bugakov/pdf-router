@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 fn fixture_djvu_path(rel: &str) -> PathBuf {
@@ -132,6 +132,7 @@ fn test_djvu_integration_with_tools() {
         strict: true,
         ocr_engine: Some(mock.clone()),
         ocr_dpi: Some(150),
+        ..ProcessOptions::default()
     };
 
     let (ocr_ir, report) = process_document_with_options(&plain_path, &opts)
@@ -148,6 +149,7 @@ fn test_djvu_integration_with_tools() {
         strict: true,
         ocr_engine: Some(failing_mock.clone()),
         ocr_dpi: Some(150),
+        ..ProcessOptions::default()
     };
 
     let err = process_document_with_options(&plain_path, &strict_failing_opts)
@@ -164,6 +166,7 @@ fn test_djvu_integration_with_tools() {
         strict: false,
         ocr_engine: Some(failing_mock),
         ocr_dpi: Some(150),
+        ..ProcessOptions::default()
     };
 
     let (res_ir, res_report) = process_document_with_options(plain_path, &non_strict_failing_opts)

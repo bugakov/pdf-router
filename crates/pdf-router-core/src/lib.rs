@@ -5,12 +5,14 @@
 pub mod adapters;
 pub mod error;
 pub mod formats;
+pub mod images;
 pub mod ir;
 pub mod ocr;
 pub mod renderers;
 
 pub use error::RouterError;
 pub use formats::{detect_format, detect_format_path, Format};
+pub use images::{doc_id_from_path, keep_raster_photo, page_images_dir};
 pub use ir::{
     BBox, Block, FigureBlock, FormulaBlock, HeadingBlock, Ir, Metadata, OcrReasonEntry, PageResult,
     SrcTool, TableBlock, IR_VERSION,
@@ -24,15 +26,70 @@ pub use renderers::{
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Processing execution options.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ProcessOptions {
     pub strict: bool,
     pub ocr_engine: Option<Arc<dyn OcrEngine>>,
     pub ocr_dpi: Option<u32>,
+    pub output_dir: Option<PathBuf>,
+    pub images_min_size: usize,
+    pub images_min_thin: usize,
+    pub images_max_aspect_ratio: f64,
+    pub extract_raster_photos: bool,
+    pub extract_vector_diagrams: bool,
+}
+
+impl Default for ProcessOptions {
+    fn default() -> Self {
+        Self {
+            strict: false,
+            ocr_engine: None,
+            ocr_dpi: Some(200),
+            output_dir: None,
+            images_min_size: 150,
+            images_min_thin: 8,
+            images_max_aspect_ratio: 4.0,
+            extract_raster_photos: true,
+            extract_vector_diagrams: false,
+        }
+    }
+}
+
+impl ProcessOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_strict(mut self, strict: bool) -> Self {
+        self.strict = strict;
+        self
+    }
+
+    pub fn with_ocr_engine(mut self, engine: Arc<dyn OcrEngine>) -> Self {
+        self.ocr_engine = Some(engine);
+        self
+    }
+
+    pub fn with_ocr_dpi(mut self, dpi: u32) -> Self {
+        self.ocr_dpi = Some(dpi);
+        self
+    }
+
+    pub fn with_output_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.output_dir = Some(dir.into());
+        self
+    }
+
+    pub fn with_images_size_gate(mut self, min_size: usize, min_thin: usize, max_ar: f64) -> Self {
+        self.images_min_size = min_size;
+        self.images_min_thin = min_thin;
+        self.images_max_aspect_ratio = max_ar;
+        self
+    }
 }
 
 impl std::fmt::Debug for ProcessOptions {
@@ -41,6 +98,10 @@ impl std::fmt::Debug for ProcessOptions {
             .field("strict", &self.strict)
             .field("ocr_engine", &self.ocr_engine.as_ref().map(|e| e.name()))
             .field("ocr_dpi", &self.ocr_dpi)
+            .field("output_dir", &self.output_dir)
+            .field("images_min_size", &self.images_min_size)
+            .field("images_min_thin", &self.images_min_thin)
+            .field("images_max_aspect_ratio", &self.images_max_aspect_ratio)
             .finish()
     }
 }
@@ -52,6 +113,8 @@ pub struct ProcessingReport {
     pub pages_native: usize,
     pub pages_ocr: usize,
     pub pages_failed: usize,
+    #[serde(default)]
+    pub images_dropped: usize,
 }
 
 /// Process a document from disk into an IR.
@@ -177,6 +240,22 @@ pub fn process_document_with_options<P: AsRef<Path>>(
             "strict mode: {} of {} pages failed processing",
             report.pages_failed, report.pages_total
         )));
+    }
+
+    // 4. Extract sidecar images if output_dir is configured
+    if let Some(ref out_dir) = options.output_dir {
+        let doc_id = doc_id_from_path(&p.to_string_lossy());
+        let (images_by_page, dropped) = match format {
+            Format::Pdf => images::extract_pdf_images(&bytes, &doc_id, out_dir, options)?,
+            Format::Docx => images::extract_docx_images(&bytes, &doc_id, out_dir, options)?,
+            _ => (std::collections::HashMap::new(), 0),
+        };
+        report.images_dropped += dropped;
+        for page in &mut ir.pages {
+            if let Some(imgs) = images_by_page.get(&page.page) {
+                page.images = imgs.clone();
+            }
+        }
     }
 
     Ok((ir, report))

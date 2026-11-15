@@ -51,6 +51,22 @@ struct Cli {
     /// Languages for OCR engine (comma-separated, e.g. "eng" or "eng,rus")
     #[arg(long, default_value = "eng")]
     ocr_lang: String,
+
+    /// Export extracted images to output directory
+    #[arg(short = 'o', long = "out", value_name = "DIR")]
+    out: Option<PathBuf>,
+
+    /// Minimum dimension (both sides below this drops) for raster sidecars
+    #[arg(long, default_value_t = 150)]
+    images_min_size: usize,
+
+    /// Minimum thin side dimension for raster sidecars
+    #[arg(long, default_value_t = 8)]
+    images_min_thin: usize,
+
+    /// Maximum aspect ratio (max/min dimension) for raster sidecars (0 = off)
+    #[arg(long, default_value_t = 4.0)]
+    images_max_aspect_ratio: f64,
 }
 
 fn main() -> Result<()> {
@@ -75,18 +91,24 @@ fn main() -> Result<()> {
         strict: args.strict,
         ocr_engine,
         ocr_dpi: Some(args.ocr_dpi),
+        output_dir: args.out,
+        images_min_size: args.images_min_size,
+        images_min_thin: args.images_min_thin,
+        images_max_aspect_ratio: args.images_max_aspect_ratio,
+        ..ProcessOptions::default()
     };
 
     let (ir, report) = process_document_with_options(&args.path, &options)
         .with_context(|| format!("Failed to process document: {}", args.path.display()))?;
 
     if args.info {
-        println!("format:       {}", ir.metadata.source_format);
-        println!("pdf_type:     {}", ir.metadata.pdf_type);
-        println!("page_count:   {}", ir.metadata.page_count);
-        println!("pages_native: {}", report.pages_native);
-        println!("pages_ocr:    {}", report.pages_ocr);
-        println!("pages_failed: {}", report.pages_failed);
+        println!("format:         {}", ir.metadata.source_format);
+        println!("pdf_type:       {}", ir.metadata.pdf_type);
+        println!("page_count:     {}", ir.metadata.page_count);
+        println!("pages_native:   {}", report.pages_native);
+        println!("pages_ocr:      {}", report.pages_ocr);
+        println!("pages_failed:   {}", report.pages_failed);
+        println!("images_dropped: {}", report.images_dropped);
         return Ok(());
     }
 

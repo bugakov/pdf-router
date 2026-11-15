@@ -3,9 +3,7 @@ use std::sync::Arc;
 
 use pdf_router_core::error::RouterError;
 use pdf_router_core::ir::Block;
-use pdf_router_core::ocr::{
-    MockOcrEngine, OcrEngine, OcrError, PageRaster, TesseractEngine,
-};
+use pdf_router_core::ocr::{MockOcrEngine, OcrEngine, OcrError, PageRaster, TesseractEngine};
 use pdf_router_core::{process_document_with_options, ProcessOptions};
 
 fn fixture_djvu_path(rel: &str) -> PathBuf {
@@ -36,7 +34,7 @@ fn test_page_raster_ppm_conversion() {
     assert_eq!(ppm.len(), b"P6\n2 2\n255\n".len() + 12);
 
     // 2. Already PPM passthrough
-    let already_ppm = format!("P6\n1 1\n255\n").into_bytes();
+    let already_ppm = b"P6\n1 1\n255\n".to_vec();
     let raster_ppm = PageRaster::new(0, 1, 1, 150, already_ppm.clone());
     assert_eq!(raster_ppm.as_ppm_bytes(), already_ppm);
 }
@@ -107,6 +105,7 @@ fn test_per_page_fault_tolerance_and_strict_mode() {
         strict: true,
         ocr_engine: Some(failing_mock.clone()),
         ocr_dpi: Some(150),
+        ..ProcessOptions::default()
     };
 
     let err = process_document_with_options(path, &strict_opts)
@@ -123,6 +122,7 @@ fn test_per_page_fault_tolerance_and_strict_mode() {
         strict: false,
         ocr_engine: Some(failing_mock),
         ocr_dpi: Some(150),
+        ..ProcessOptions::default()
     };
 
     let (ir, report) =

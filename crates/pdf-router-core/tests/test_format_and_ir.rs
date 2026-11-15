@@ -40,6 +40,7 @@ fn test_ir_serialization_roundtrip() {
             pages_needing_ocr: vec![],
             confidence: 1.0,
             title: Some("Test Document".to_string()),
+            ..Default::default()
         },
         pages: vec![PageResult {
             page: 0,
@@ -99,6 +100,7 @@ fn test_render_markdown() {
             pages_needing_ocr: vec![],
             confidence: 1.0,
             title: None,
+            ..Default::default()
         },
         pages: vec![
             PageResult {

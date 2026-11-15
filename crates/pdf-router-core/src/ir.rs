@@ -94,6 +94,14 @@ pub struct PageResult {
     pub needs_ocr: bool,
 }
 
+/// One entry of `ocr_reasons_by_page` (1-indexed page).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct OcrReasonEntry {
+    pub page: usize,
+    #[serde(default)]
+    pub reasons: Vec<String>,
+}
+
 /// Document-level metadata.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Metadata {
@@ -103,12 +111,46 @@ pub struct Metadata {
     pub pdf_type: String,
     pub page_count: usize,
     #[serde(default)]
-    pub pages_with_tables: Vec<usize>,
-    #[serde(default)]
-    pub pages_needing_ocr: Vec<usize>,
     pub confidence: f64,
+    #[serde(default)]
+    pub processing_time_ms: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(default)]
+    pub is_complex_layout: bool,
+    #[serde(default)]
+    pub has_encoding_issues: bool,
+    #[serde(default)]
+    pub pages_with_tables: Vec<usize>,
+    #[serde(default)]
+    pub pages_with_columns: Vec<usize>,
+    #[serde(default)]
+    pub pages_needing_ocr: Vec<usize>,
+    #[serde(default)]
+    pub ocr_reasons_by_page: Vec<OcrReasonEntry>,
+    #[serde(default)]
+    pub unusable_text_pages: Vec<usize>,
+}
+
+impl Default for Metadata {
+    fn default() -> Self {
+        Self {
+            source_format: "unknown".to_string(),
+            source_path: None,
+            pdf_type: "unknown".to_string(),
+            page_count: 0,
+            confidence: 0.0,
+            processing_time_ms: 0.0,
+            title: None,
+            is_complex_layout: false,
+            has_encoding_issues: false,
+            pages_with_tables: vec![],
+            pages_with_columns: vec![],
+            pages_needing_ocr: vec![],
+            ocr_reasons_by_page: vec![],
+            unusable_text_pages: vec![],
+        }
+    }
 }
 
 /// Complete document Intermediate Representation.

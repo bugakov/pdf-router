@@ -13,6 +13,9 @@ pub enum RouterError {
     #[error("Unsupported format: {0}")]
     UnsupportedFormat(String),
 
+    #[error("Invalid document: {0}")]
+    InvalidDocument(String),
+
     #[error("Processing error: {0}")]
     Processing(String),
 }

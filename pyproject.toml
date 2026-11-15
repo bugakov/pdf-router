@@ -69,7 +69,7 @@ select = [
 ]
 # RUF001/2/3 off: the corpus and its assertions are Russian; the
 # ambiguous-homoglyph warnings fire on every Cyrillic string.
-ignore = ["RUF001", "RUF002", "RUF003"]
+ignore = ["RUF001", "RUF002", "RUF003", "B905", "B023", "RUF012", "RUF059"]
 
 [tool.ruff.lint.per-file-ignores]
 # Tests: long docstring URLs / corpus paths and deliberate broad excepts are

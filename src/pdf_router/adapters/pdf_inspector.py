@@ -230,7 +230,8 @@ def _extract_ir_pymupdf_fallback(
             reasons_by_page = {int(e.page): e for e in result.ocr_reasons_by_page}
 
         pages: list[PageResult] = []
-        for i, pm_page in enumerate(doc):
+        for i in range(page_count):
+            pm_page = doc[i]
             one_indexed = i + 1
             txt = pm_page.get_text() or ""
             is_scan = (len(txt.strip()) < 50) or (one_indexed in pages_needing_ocr)
@@ -255,10 +256,16 @@ def _extract_ir_pymupdf_fallback(
                 )
             )
 
+        pdf_type_val = (
+            pdf_type
+            if pdf_type != "none"
+            else ("scanned" if len(pages_needing_ocr) == page_count else "image_based")
+        )
+        doc_meta = doc.metadata or {}
         metadata = Metadata(
-            pdf_type=pdf_type if pdf_type != "none" else ("scanned" if len(pages_needing_ocr) == page_count else "image_based"),
+            pdf_type=pdf_type_val,
             page_count=page_count,
-            title=getattr(result, "title", None) or doc.metadata.get("title") or None,
+            title=getattr(result, "title", None) or doc_meta.get("title") or None,
             pages_needing_ocr=pages_needing_ocr,
         )
         return IR(metadata=metadata, pages=pages)

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from pdf_router.config import RendererConfig
-from pdf_router.ir import FigureBlock, HeadingBlock, IR, PageResult, TableBlock
+from pdf_router.ir import FigureBlock, HeadingBlock, IR, TableBlock
 from pdf_router.renderers.chunks import (
     _HEADING_RE,
     _MIN_TEXT_CHARS,
@@ -189,13 +189,13 @@ def iter_records(ir: IR, *, config: RendererConfig) -> Iterator[dict[str, Any]]:
 
             whole_embed = embed_of(data)
             groups: list[list[list[str]]]
-            if not data or _tokens(whole_embed) <= max_tokens:
+            if not data or (max_tokens is not None and _tokens(whole_embed) <= max_tokens):
                 groups = [data]
             else:
                 groups = []
                 current: list[list[str]] = []
                 for row in data:
-                    if current and _tokens(embed_of([*current, row])) > max_tokens:
+                    if current and max_tokens is not None and _tokens(embed_of([*current, row])) > max_tokens:
                         groups.append(current)
                         current = [row]
                     else:
@@ -384,8 +384,8 @@ def iter_records(ir: IR, *, config: RendererConfig) -> Iterator[dict[str, Any]]:
 
         # --- Process Text Half (Markdown minus subtracted tables) ---
         remaining = _strip_tables(page.markdown or "", page)
-        max_chars_full = max_tokens * 4
-        overlap_chars = overlap_tokens * 4
+        max_chars_full = (max_tokens or 512) * 4
+        overlap_chars = (overlap_tokens or 64) * 4
 
         seq = 0
         for section, text in _split_blocks(remaining):

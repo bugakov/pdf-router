@@ -11,3 +11,12 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 pdf-router-core = { path = "../pdf-router-core" }
+pyo3 = { workspace = true }
+pythonize = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+[features]
+default = []
+extension-module = ["pyo3/extension-module"]

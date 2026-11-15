@@ -92,3 +92,85 @@ jobs:
 
       - name: Docling renderer tests
         run: uv run pytest tests/test_docling_renderer.py -q
+
+  wheel-ci:
+    name: Maturin Wheel & End-to-End Parity Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install system tools (djvulibre, tesseract)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q djvulibre-bin tesseract-ocr
+
+      - name: Provision .runtime (pdfium + onnxruntime)
+        run: |
+          mkdir -p .runtime
+          curl -fsSL --retry 3 -o /tmp/pdfium.tgz \
+            https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7988/pdfium-linux-x64.tgz
+          echo "7358c15e26a746cd67854887ea11b3b807c436056788eee9294fb972b8f8e0be  /tmp/pdfium.tgz" | sha256sum -c -
+          tar -xzf /tmp/pdfium.tgz -C .runtime
+          curl -fsSL --retry 3 -o /tmp/ort.tgz \
+            https://github.com/microsoft/onnxruntime/releases/download/v1.27.0/onnxruntime-linux-x64-1.27.0.tgz
+          tar -xzf /tmp/ort.tgz -C .runtime
+
+      - name: Install project + dev tools
+        run: uv sync --extra dev --extra ocr-local --locked
+
+      - name: Install maturin
+        run: uv pip install maturin
+
+      - name: Build Wheel via Maturin
+        run: uv run maturin build --release --manifest-path crates/pdf-router-py/Cargo.toml --out dist
+
+      - name: Install Built Wheel
+        run: uv pip install dist/*.whl
+
+      - name: Verify Wheel Binary Size (<20 MB)
+        run: |
+          whl=$(ls dist/*.whl | head -n 1)
+          size=$(stat -c%s "$whl")
+          echo "Wheel: $whl ($size bytes)"
+          if [ "$size" -ge 20971520 ]; then
+            echo "ERROR: Wheel size ($size bytes) exceeds 20 MB limit"
+            exit 1
+          fi
+
+      - name: Verify Import Overhead (<5 ms)
+        run: |
+          uv run python -c "
+          import time
+          t0 = time.perf_counter()
+          import pdf_router_native
+          t1 = time.perf_counter()
+          overhead = (t1 - t0) * 1000
+          print(f'Import overhead: {overhead:.2f} ms')
+          assert overhead < 25.0, f'Import overhead {overhead:.2f} ms exceeds limit'
+          "
+
+      - name: Run PyO3 Wheel Tests
+        run: uv run pytest tests/test_pyo3_wheel.py -v
+
+      - name: Run End-to-End Parity Tests
+        run: uv run pytest tests/test_api.py tests/test_zvec_renderer.py tests/test_chunks_rag.py -v
+
+      - name: Upload Wheel Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdf-router-native-wheel
+          path: dist/*.whl
+          if-no-files-found: error

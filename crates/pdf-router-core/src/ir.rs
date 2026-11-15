@@ -199,9 +199,14 @@ impl Default for Metadata {
     }
 }
 
+fn default_ir_version() -> String {
+    IR_VERSION.to_string()
+}
+
 /// Complete document Intermediate Representation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Ir {
+    #[serde(default = "default_ir_version")]
     pub ir_version: String,
     pub metadata: Metadata,
     pub pages: Vec<PageResult>,

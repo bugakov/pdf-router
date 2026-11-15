@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "pdf-router-native"
+version = "0.7.0"
+description = "High-speed Rust engine and PyO3 Python extension for pdf-router"
+license = { text = "AGPL-3.0-only" }
+requires-python = ">=3.12"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]

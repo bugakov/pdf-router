@@ -79,6 +79,14 @@ from pdf_router.renderers.docling import DoclingUnavailableError
 
 logger = logging.getLogger("pdf_router")
 
+try:
+    from pdf_router import pdf_router_native  # type: ignore[attr-defined]
+except ImportError:
+    try:
+        import pdf_router_native  # type: ignore[import-not-found]
+    except ImportError:
+        pdf_router_native = None
+
 __all__ = [
     "ConfigError",
     "DoclingUnavailableError",
@@ -89,9 +97,11 @@ __all__ = [
     "ProgressEvent",
     "UnsupportedFormatError",
     "convert",
+    "iter_zvec_docs",
     "iter_zvec_records",
     "load_config",
     "params_fingerprint",
+    "pdf_router_native",
     "process_pdf",
     "render_chunks",
     "render_docling",
@@ -410,6 +420,10 @@ def iter_zvec_records(
     else:
         ir = target
     return zvec.iter_records(ir, config=cfg)
+
+
+#: Alias matching the Rust core and ADR-0010 specification.
+iter_zvec_docs = iter_zvec_records
 
 
 #: Renderer name -> function producing its text. Order is irrelevant; the

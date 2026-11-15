@@ -74,10 +74,10 @@ pub fn clean_number_text(text: &str) -> String {
     text.to_string()
 }
 
-/// Parse `xl/sharedStrings.xml` into a list of strings.
-pub fn parse_shared_strings(xml: &str) -> Vec<String> {
-    let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(false);
+/// Parse `xl/sharedStrings.xml` stream into a list of strings with zero DOM allocations.
+pub fn parse_shared_strings_stream<R: Read>(reader: R) -> Result<Vec<String>, RouterError> {
+    let mut xml_reader = Reader::from_reader(std::io::BufReader::new(reader));
+    xml_reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
     let mut strings = Vec::new();
 
@@ -86,7 +86,7 @@ pub fn parse_shared_strings(xml: &str) -> Vec<String> {
     let mut current_si = String::new();
 
     loop {
-        match reader.read_event_into(&mut buf) {
+        match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => match local_name(e.name().into_inner()) {
                 b"si" => {
                     in_si = true;
@@ -112,13 +112,23 @@ pub fn parse_shared_strings(xml: &str) -> Vec<String> {
                 }
                 _ => {}
             },
-            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                return Err(RouterError::InvalidDocument(format!(
+                    "XML parse error in xl/sharedStrings.xml: {e}"
+                )));
+            }
             _ => {}
         }
         buf.clear();
     }
 
-    strings
+    Ok(strings)
+}
+
+/// Parse `xl/sharedStrings.xml` string into a list of strings.
+pub fn parse_shared_strings(xml: &str) -> Vec<String> {
+    parse_shared_strings_stream(xml.as_bytes()).unwrap_or_default()
 }
 
 /// Relationship mapping (Id -> internal part path in archive).
@@ -243,10 +253,13 @@ fn extract_merge_cell(
     }
 }
 
-/// Parse a `worksheets/sheet*.xml` stream.
-fn parse_worksheet_xml(xml: &str, shared: &[String]) -> Result<WorksheetData, RouterError> {
-    let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(false);
+/// Parse a `worksheets/sheet*.xml` stream with bounded O(1) memory overhead.
+pub fn parse_worksheet_stream<R: Read>(
+    reader: R,
+    shared: &[String],
+) -> Result<WorksheetData, RouterError> {
+    let mut xml_reader = Reader::from_reader(std::io::BufReader::new(reader));
+    xml_reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
 
     let mut data = WorksheetData::default();
@@ -262,7 +275,7 @@ fn parse_worksheet_xml(xml: &str, shared: &[String]) -> Result<WorksheetData, Ro
     let mut is_text = String::new();
 
     loop {
-        match reader.read_event_into(&mut buf) {
+        match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
                 let tag = local_name(e.name().into_inner());
                 match tag {
@@ -306,6 +319,18 @@ fn parse_worksheet_xml(xml: &str, shared: &[String]) -> Result<WorksheetData, Ro
             Ok(Event::Empty(ref e)) => {
                 let tag = local_name(e.name().into_inner());
                 match tag {
+                    b"row" => {
+                        let is_hidden = get_attribute_value(e, b"hidden")
+                            .map(|h| h == "1" || h.eq_ignore_ascii_case("true"))
+                            .unwrap_or(false);
+                        if is_hidden {
+                            if let Some(r) =
+                                get_attribute_value(e, b"r").and_then(|r| r.parse::<usize>().ok())
+                            {
+                                data.hidden_rows.insert(r);
+                            }
+                        }
+                    }
                     b"col" => {
                         extract_hidden_col(e, &mut data.hidden_cols);
                     }
@@ -384,6 +409,11 @@ fn parse_worksheet_xml(xml: &str, shared: &[String]) -> Result<WorksheetData, Ro
     }
 
     Ok(data)
+}
+
+/// Parse a `worksheets/sheet*.xml` string.
+pub fn parse_worksheet_xml(xml: &str, shared: &[String]) -> Result<WorksheetData, RouterError> {
+    parse_worksheet_stream(xml.as_bytes(), shared)
 }
 
 /// Vertical span: value repeated down. Horizontal span: first cell only.
@@ -488,6 +518,8 @@ fn header_rows(rows: &[Vec<String>]) -> usize {
 
 /// Build PageResult for one sheet.
 fn build_sheet_page(index: usize, sheet_name: &str, mut ws: WorksheetData) -> PageResult {
+    ws.cells
+        .retain(|&(r, c), _| !ws.hidden_rows.contains(&r) && !ws.hidden_cols.contains(&c));
     let width = ws.cells.keys().map(|&(_, c)| c).max().unwrap_or(0);
     apply_merges(
         &mut ws.cells,
@@ -574,11 +606,9 @@ pub fn process_xlsx(bytes: &[u8], source_path: Option<&str>) -> Result<Ir, Route
         HashMap::new()
     };
 
-    // 3. Read xl/sharedStrings.xml if present
-    let shared_strings = if let Ok(mut entry) = archive.by_name("xl/sharedStrings.xml") {
-        let mut xml = String::new();
-        entry.read_to_string(&mut xml).unwrap_or_default();
-        parse_shared_strings(&xml)
+    // 3. Read xl/sharedStrings.xml if present (streaming without buffering full XML DOM)
+    let shared_strings = if let Ok(entry) = archive.by_name("xl/sharedStrings.xml") {
+        parse_shared_strings_stream(entry)?
     } else {
         Vec::new()
     };
@@ -592,7 +622,7 @@ pub fn process_xlsx(bytes: &[u8], source_path: Option<&str>) -> Result<Ir, Route
         None
     };
 
-    // 5. Parse sheets in order
+    // 5. Parse sheets in order (streaming worksheets without full DOM buffering)
     let sheet_defs = parse_workbook_sheets(&wb_xml)?;
     let mut pages = Vec::new();
     let mut pages_with_tables = Vec::new();
@@ -603,22 +633,21 @@ pub fn process_xlsx(bytes: &[u8], source_path: Option<&str>) -> Result<Ir, Route
             .cloned()
             .unwrap_or_else(|| format!("xl/worksheets/sheet{}.xml", index + 1));
 
-        let sheet_xml = {
-            let mut entry = archive.by_name(&part_path).map_err(|e| {
-                RouterError::InvalidDocument(format!(
-                    "malformed xlsx (unreadable {part_path}): {e}"
-                ))
+        let sheet_idx = archive
+            .index_for_name(&part_path)
+            .or_else(|| {
+                let alt_part = part_path.strip_prefix("xl/").unwrap_or(&part_path);
+                archive.index_for_name(alt_part)
+            })
+            .ok_or_else(|| {
+                RouterError::InvalidDocument(format!("malformed xlsx (missing {part_path})"))
             })?;
-            let mut xml = String::new();
-            entry.read_to_string(&mut xml).map_err(|e| {
-                RouterError::InvalidDocument(format!(
-                    "malformed xlsx (unreadable {part_path}): {e}"
-                ))
-            })?;
-            xml
-        };
 
-        let ws = parse_worksheet_xml(&sheet_xml, &shared_strings)?;
+        let entry = archive.by_index(sheet_idx).map_err(|e| {
+            RouterError::InvalidDocument(format!("malformed xlsx (unreadable {part_path}): {e}"))
+        })?;
+
+        let ws = parse_worksheet_stream(entry, &shared_strings)?;
         let page = build_sheet_page(index, &sheet.name, ws);
         if page.blocks.iter().any(|b| matches!(b, Block::Table(_))) {
             pages_with_tables.push(index + 1);

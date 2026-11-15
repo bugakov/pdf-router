@@ -4,9 +4,45 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
-  lint-types-test:
+  rust-ci:
+    name: Rust (Format, Clippy, Test, Build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check Formatting
+        run: cargo fmt --check
+
+      - name: Clippy Linter
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Workspace Tests
+        run: cargo test --workspace --verbose
+
+      - name: Build Release Binary
+        run: cargo build --release -p pdf-router-cli
+
+      - name: Upload Binary Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdf-router-linux-x86_64
+          path: target/release/pdf-router
+          if-no-files-found: error
+
+  python-ci:
+    name: Python (Ruff, Mypy, Pytest)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -25,8 +61,6 @@ jobs:
       - name: Provision .runtime (pdfium + onnxruntime)
         run: |
           mkdir -p .runtime
-          # pdfium: same build as the dev .runtime (see .runtime/PROVENANCE.json),
-          # pinned by sha256 so CI and dev machines run identical binaries.
           curl -fsSL --retry 3 -o /tmp/pdfium.tgz \
             https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7988/pdfium-linux-x64.tgz
           echo "7358c15e26a746cd67854887ea11b3b807c436056788eee9294fb972b8f8e0be  /tmp/pdfium.tgz" | sha256sum -c -
@@ -47,10 +81,6 @@ jobs:
       - name: Fast tests
         run: uv run pytest -m "not slow" -q
 
-      # The docling renderer is an optional extra (ADR-0009). Its tests
-      # skip when docling-core is absent, so the extra is installed here
-      # explicitly — otherwise the docling schema gate
-      # (DoclingDocument.model_validate) would never run in CI.
       - name: Install the docling extra
         run: uv sync --extra dev --extra docling --locked
 

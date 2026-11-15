@@ -1,12 +1,25 @@
-use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use pdf_router_core::error::RouterError;
-use pdf_router_core::ir::{Block, Ir, Metadata, PageResult, SrcTool};
+use pdf_router_core::ir::Block;
 use pdf_router_core::ocr::{
-    MockOcrEngine, OcrEngine, OcrError, OcrResult, PageRaster, TesseractEngine,
+    MockOcrEngine, OcrEngine, OcrError, PageRaster, TesseractEngine,
 };
-use pdf_router_core::{process_document_with_options, ProcessOptions, ProcessingReport};
+use pdf_router_core::{process_document_with_options, ProcessOptions};
+
+fn fixture_djvu_path(rel: &str) -> PathBuf {
+    let p = PathBuf::from(rel);
+    if p.exists() {
+        return p;
+    }
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let from_manifest = manifest.join("../../").join(rel);
+    if from_manifest.exists() {
+        return from_manifest;
+    }
+    p
+}
 
 #[test]
 fn test_page_raster_ppm_conversion() {
@@ -85,10 +98,8 @@ fn test_tesseract_engine_config_and_missing_binary() {
 
 #[test]
 fn test_per_page_fault_tolerance_and_strict_mode() {
-    use std::io::Write;
-    let mut tmp = tempfile::NamedTempFile::new().unwrap();
-    tmp.write_all(b"Hello raw document\n").unwrap();
-    let path = tmp.path();
+    let p27_path = fixture_djvu_path("tests/fixtures/pdf/p27.pdf");
+    let path = &p27_path;
 
     // 1. Run with mock OCR failing page 0 in strict mode -> fails
     let failing_mock = Arc::new(MockOcrEngine::new("Success").with_failing_page(0));
@@ -114,12 +125,12 @@ fn test_per_page_fault_tolerance_and_strict_mode() {
         ocr_dpi: Some(150),
     };
 
-    // Note: for plain text stub, page has needs_ocr = false by default,
-    // so let's verify using MockOcrEngine with a test IR or verify report behavior directly.
     let (ir, report) =
         process_document_with_options(path, &non_strict_opts).expect("non-strict must succeed");
     assert_eq!(ir.pages.len(), 1);
     assert_eq!(report.pages_total, 1);
+    assert_eq!(report.pages_failed, 1);
+    assert!(ir.pages[0].error.is_some());
 }
 
 #[test]
@@ -139,7 +150,7 @@ fn test_live_tesseract_if_installed() {
     let result = engine.ocr_page(raster);
     // On an empty white square, tesseract will return empty text (OcrError::Empty) or whitespace
     match result {
-        Ok(res) => {
+        Ok(_res) => {
             assert_eq!(engine.name(), "tesseract");
         }
         Err(OcrError::Empty(idx)) => {

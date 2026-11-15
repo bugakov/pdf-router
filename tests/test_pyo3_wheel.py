@@ -74,9 +74,9 @@ def test_wheel_iter_zvec_docs_from_path(p5_pdf: Path) -> None:
     assert isinstance(docs, list)
     assert len(docs) >= 1
     rec = docs[0]
-    assert rec["doc_uid"] == "test_uid"
-    assert "fields" in rec
-    assert "text" in rec["fields"]
+    assert rec["fields"]["doc_uid"] == "test_uid"
+    assert "content" in rec["fields"]
+    assert "embed_text" in rec
 
 
 def test_wheel_iter_zvec_docs_from_ir(p5_pdf: Path) -> None:
@@ -84,7 +84,7 @@ def test_wheel_iter_zvec_docs_from_ir(p5_pdf: Path) -> None:
     docs = pdf_router_native.iter_zvec_docs(ir_dict, doc_uid="from_ir")
     assert isinstance(docs, list)
     assert len(docs) >= 1
-    assert docs[0]["doc_uid"] == "from_ir"
+    assert docs[0]["fields"]["doc_uid"] == "from_ir"
 
 
 def test_wheel_renderers(p5_pdf: Path) -> None:

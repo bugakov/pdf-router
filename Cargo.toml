@@ -1,0 +1,21 @@
+[workspace]
+members = [
+    "crates/pdf-router-core",
+    "crates/pdf-router-cli",
+    "crates/pdf-router-py",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.7.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+authors = ["bugakov <bugakovru@gmail.com>"]
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+clap = { version = "4.5", features = ["derive"] }
+anyhow = "1.0"
+rayon = "1.10"

@@ -25,6 +25,7 @@ All compilation, linting, testing, and release artifact verification must be per
 
 - **CI Workflow definition**: `.github/workflows/ci.yml`
 - **CI Triggers**: Automatically runs on every `push` to branches matching `main` and `feat/**`, as well as on pull requests.
+- **Runner Environment**: Pinned to `ubuntu-24.04` across all jobs to match the operational host's GLIBC version (2.39). Floating `ubuntu-latest` is prohibited because migrations to newer Ubuntu versions (e.g. 26.04 / GLIBC 2.43) produce compiled CLI binaries and PyO3 wheels that fail at runtime on Ubuntu 24.04 hosts with `version GLIBC_2.43 not found`.
 
 ### Agent and Contributor Workflow
 
